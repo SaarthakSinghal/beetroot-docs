@@ -1,0 +1,55 @@
+---
+title: Hello World
+description: Your first document
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+Welcome to the docs! You can start writing documents in `/content/docs`.
+
+## What is Next?
+
+<Accordions>
+<Accordion title="My Title" id="my-title">
+
+My Content
+
+</Accordion>
+
+</Accordions>
+
+```py twoslash lineNumbers
+def upper_bound(nums: list[int], n: int) -> int:
+  low = 0
+  high = len(nums) - 1
+//  ^?
+  last number
+  ans = high + 1
+
+  while (low <= high):
+    mid = low + (high - low) // 2
+
+    if (nums[mid] > n):
+      ans = mid
+      high = mid - 1
+    else:
+      low = mid + 1
+
+  return ans
+
+
+if __name__ == "__main__":
+  # Test the function
+  print(upper_bound([3,2,1,6,9,17,20], 17))
+  pass
+```
+
+```ts twoslash lineNumbers
+const a = 'Hello World';
+console.log(a);
+```
+
+<Cards>
+  <Card title="Learn more about Next.js" href="https://nextjs.org/docs" />
+  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
+</Cards>

@@ -1,0 +1,344 @@
+---
+title: "Rekognition Detect Faces"
+description: "Call Rekognition DetectFaces on each uploaded photo, storing faceCount in DynamoDB."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+
+## Goal
+
+When a photo lands in <code>photos-raw/</code>, the ingestion Lambda should:
+
+1. Call <b>Rekognition DetectFaces</b> on that S3 object
+2. Log <b>how many faces</b> were found (and bounding boxes for debugging)
+3. Store <code>faceCount</code> in the <code>Photos</code> table
+
+## What is `DetectFaces`?
+
+<code>DetectFaces</code> scans an image and returns a list of faces it finds,
+including:
+
+- a bounding box for each face (normalized coordinates)
+- confidence score
+- additional attributes (optional)
+
+We’ll use <b>DEFAULT</b> attributes because it’s enough for bounding boxes and confidence.
+
+## Prerequisites
+
+Your ingestion role(`beetroot-ingest-role`) should already allow:
+
+- <code>rekognition:DetectFaces</code>
+
+<Callout type="warn" title="If not, update the role before continuing.">
+
+</Callout>
+
+## Detect Faces Code
+
+## What this code does
+
+This update extends your existing “Photo Record + Idempotency” Lambda so that after a photo record is inserted:
+
+- Rekognition scans the uploaded image
+- The Lambda logs how many faces were found
+- The Lambda stores <code>faceCount</code> inside the DynamoDB <code>Photos</code> item
+
+That gives us two important outputs for later:
+
+- `faceCount` (useful for UI and debugging)
+- `BoundingBox` (required for cropping face thumbnails next)
+
+## Part 1: Add the Rekognition client
+
+Add a Rekognition client near your other AWS clients/resources.
+
+```python
+# --- AWS clients/resources ---
+ddb = boto3.resource("dynamodb")
+rek = boto3.client("rekognition") ## [!code ++]
+```
+
+## Part 2: Call `detect_faces` on the S3 object
+
+After you have <code>bucket</code>, <code>key</code>, and <code>photo_id</code> (and after your DynamoDB insert), call Rekognition.
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase8-detectfaces" persist>
+
+  <Tab value="Code">
+
+```python
+resp = rek.detect_faces(
+    Image={"S3Object": {"Bucket": bucket, "Name": key}},
+    Attributes=["DEFAULT"],
+)
+
+face_details = resp.get("FaceDetails", [])
+face_count = len(face_details)
+
+print(f"DetectFaces: photoId={photo_id} faces={face_count}")
+
+for idx, fd in enumerate(face_details, start=1):
+    bb = fd.get("BoundingBox", {})
+    conf = fd.get("Confidence", None)
+    print(f"  Face {idx}: confidence={conf} bbox={bb}")
+```
+
+  </Tab>
+
+  <Tab value="Input">
+Example inputs into Rekognition:
+
+- <code>Bucket = beetroot-raw</code>
+- <code>Name = photos-raw/group1.jpg</code>
+- <code>Attributes = DEFAULT</code>
+
+This tells Rekognition: “scan this S3 image and return face bounding boxes + confidence.”
+
+  </Tab>
+
+  <Tab value="Output">
+What you should see in logs:
+
+- <code>DetectFaces: photoId=... faces=3</code>
+- one line per face with:
+  - confidence
+  - bounding box coordinates
+
+The bounding boxes are normalized numbers (0 to 1) — we’ll convert them to pixels later for cropping.
+
+  </Tab>
+
+</Tabs>
+
+### How this works?
+
+1. We pass the uploaded image location directly from S3:
+   - `Bucket` → which S3 bucket the image is in
+   - `Name` → the full object key (path) inside the bucket
+   - `Attributes=["DEFAULT"]` → return only what we need (bounding boxes + confidence)
+
+   ```python
+   resp = rek.detect_faces(
+       Image={"S3Object": {"Bucket": bucket, "Name": key}},
+       Attributes=["DEFAULT"],
+   )
+   ```
+
+2. Rekognition returns a JSON response. The most important field for us are:
+   - `face_details = resp.get("FaceDetails", [])` is a list where each entry represents one detected face
+   - `face_count = len(face_details)` gives total faces found
+
+   ```python
+   face_details = resp.get("FaceDetails", [])
+   face_count = len(face_details)
+   ```
+
+3. Looping through all faces and logging:
+   - `Confidence`: how sure Rekognition is that this is a real face
+   - `BoundingBox`: where the face is located in the image
+
+   ```python
+   print(f"DetectFaces: photoId={photo_id} faces={face_count}")
+
+   for idx, fd in enumerate(face_details, start=1):
+       bb = fd.get("BoundingBox", {})
+       conf = fd.get("Confidence", None)
+       print(f"  Face {idx}: confidence={conf} bbox={bb}")
+   ```
+
+   <Callout type="tip" title="What are bounding boxes?">
+     A bounding box is a rectangle around a detected face. Rekognition returns
+     it as normalized coordinates (<code>Left</code>, <code>Top</code>,{" "}
+     <code>Width</code>, <code>Height</code>) between 0 and 1.
+   </Callout>
+
+## Part 3: Store `faceCount` back into Photos table
+
+After computing <code>face_count</code>, update the Photo item.
+
+```python
+photos_table.update_item(
+    Key={"photoId": photo_id},
+    UpdateExpression="SET faceCount = :c",
+    ExpressionAttributeValues={":c": face_count},
+)
+```
+
+### How it updates?
+
+1. <b>Key</b> selects the item to update: `{"photoId": photo_id}`
+2. <b>SET</b> creates or overwrites <code>faceCount</code>
+3. <b>:c</b> is a placeholder, mapped using
+   <code>ExpressionAttributeValues</code>
+4. If <code>faceCount</code> already exists, DynamoDB overwrites it with the new value
+
+## Updated Lambda Code
+
+Paste this into <code>beetroot-ingest</code> and click <b>Deploy</b>.
+
+```python title="beetroot-ingest/lambda_function.py" lineNumbers
+import json
+import os
+import hashlib
+from datetime import datetime, timezone
+from urllib.parse import unquote_plus
+
+import boto3
+from botocore.exceptions import ClientError
+
+# --- AWS clients/resources ---
+ddb = boto3.resource("dynamodb")
+rek = boto3.client("rekognition")
+
+# --- Env vars ---
+PHOTOS_TABLE = os.environ.get("PHOTOS_TABLE", "Photos")
+RAW_PREFIX = os.environ.get("RAW_PREFIX", "photos-raw/")
+
+photos_table = ddb.Table(PHOTOS_TABLE)
+
+def make_photo_id(bucket: str, key: str) -> str:
+    raw = f"{bucket}/{key}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:20]
+
+def lambda_handler(event, context):
+    records = event.get("Records", [])
+    if not records:
+        print("No Records found; nothing to do.")
+        return {"statusCode": 200, "body": "no records"}
+
+    for r in records:
+        s3 = r.get("s3", {})
+        bucket = s3.get("bucket", {}).get("name")
+        key = s3.get("object", {}).get("key")
+
+        if not bucket or not key:
+            print("Skipping record: missing bucket/key")
+            continue
+
+        key = unquote_plus(key)
+
+        if not key.startswith(RAW_PREFIX):
+            print(f"Skipping key not under RAW_PREFIX: {key}")
+            continue
+
+        photo_id = make_photo_id(bucket, key)
+        uploaded_at = datetime.now(timezone.utc).isoformat()
+
+        # --- Insert photo record idempotently ---
+        item = {
+            "photoId": photo_id,
+            "s3Bucket": bucket,
+            "s3Key": key,
+            "uploadedAt": uploaded_at,
+        }
+
+        try:
+            photos_table.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(photoId)",
+            )
+            print(f"Photos: inserted photoId={photo_id} key={key}")
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "Unknown")
+            if code == "ConditionalCheckFailedException":
+                print(f"Photos: already exists, skipping photoId={photo_id} key={key}")
+                continue
+            print("DynamoDB put_item failed:", str(e))
+            raise
+
+        # --- Phase 8: Detect faces (DEFAULT) ---
+        resp = rek.detect_faces(
+            Image={"S3Object": {"Bucket": bucket, "Name": key}},
+            Attributes=["DEFAULT"],
+        )
+        print(f"DetectFaces response: {resp}")
+
+        face_details = resp.get("FaceDetails", [])
+        face_count = len(face_details)
+
+        print(f"DetectFaces: photoId={photo_id} faces={face_count}")
+
+        for idx, fd in enumerate(face_details, start=1):
+            bb = fd.get("BoundingBox", {})
+            conf = fd.get("Confidence", None)
+            print(f"  Face {idx}: confidence={conf} bbox={bb}")
+
+        # Store faceCount back into Photos table
+        photos_table.update_item(
+            Key={"photoId": photo_id},
+            UpdateExpression="SET faceCount = :c",
+            ExpressionAttributeValues={":c": face_count},
+        )
+
+    return {"statusCode": 200, "body": "ingest lambda with detect_faces ok"}
+```
+
+## Test
+
+1. Upload a group photo:
+
+```bash
+aws s3 cp ./v2-test-photos/<onefile>.jpg s3://beetroot-raw/photos-raw/<onefile>.jpg --region us-east-1
+```
+
+2. Open **CloudWatch logs** for <code>beetroot-ingest</code> and confirm:
+   - <code>DetectFaces: photoId=... faces=...</code>
+   - one or more bounding box lines
+
+3. Open DynamoDB <code>Photos</code> and confirm the item has <code>faceCount</code>.
+
+## Checkpoint
+
+This is what you should see in your **CloudWatch logs**:
+
+![DetectFaces output with boundingBox and confidence score for each face](/images/architecture/cloudwatch-ingest-rekognition-detectfaces.png)
+
+You should also see a new row with `faceCount` in your `PHOTOS` table
+
+![Photos table in DynamoDB with faceCount and other attributes](/images/architecture/dynamodb-photos-facecount.png)
+
+---
+
+## Common Student Questions
+
+<Tabs items={["Why loop Records?", "DEFAULT vs ALL?", "Why bounding boxes?", "Why store faceCount?"]} groupId="phase8-student-questions" persist>
+
+<Tab value="Why loop Records?">
+S3 events can include multiple records in one invocation. Looping makes the Lambda correct even if multiple uploads arrive together.
+
+</Tab>
+
+<Tab value="DEFAULT vs ALL?">
+  We use <b>DEFAULT</b> because it gives the bounding box and confidence we need
+  for cropping.
+  <b>ALL</b> adds extra details (emotions, landmarks, etc.) that we don’t need
+  right now.
+</Tab>
+
+<Tab value="Why bounding boxes?">
+  The next phase is cropping face thumbnails.
+  Cropping is done using the bounding box coordinates returned by <code>DetectFaces</code>.
+</Tab>
+  <Tab value="Why store faceCount?">
+It makes verification easy (“did `DetectFaces` work?”) and lets the UI show quick summary stats later.
+  </Tab>
+</Tabs>
+
+## Common Mistakes
+
+<Tabs items={["AccessDeniedException", "InvalidImageFormatException", "Logs show faces=0"]} groupId="phase8-issues" persist>
+  <Tab value="AccessDeniedException">
+    If you see <code>AccessDeniedException</code>, your role is missing Rekognition permission (<code>DetectFaces</code>).
+  </Tab>
+
+<Tab value="InvalidImageFormatException">
+  If you see <code>InvalidImageFormatException</code>, try a JPG/PNG with a
+  clear face.
+</Tab>
+
+  <Tab value="Logs show faces=0">
+    If logs show <code>faces=0</code>, try a photo with larger, front-facing faces.
+  </Tab>
+</Tabs>

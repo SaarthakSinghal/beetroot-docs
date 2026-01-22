@@ -1,0 +1,253 @@
+---
+title: "Ingest Lambda IAM Role"
+description: "Create a role for the ingestion Lambda."
+---
+
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Callout } from "fumadocs-ui/components/callout";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+Create an IAM role for the **Ingestion Lambda** that can:
+
+- read raw photos from the `beetroot-raw` S3 bucket
+- write face thumbnails to the `beetroot-thumbs` S3 bucket
+- call Rekognition (`DetectFaces`, `SearchFacesByImage`, `IndexFaces`)
+- write records to DynamoDB (`Photos`, `Persons`, `Occurrences`)
+- write logs to CloudWatch
+
+<Callout type="warning" title="Least privilege">
+Do not use broad policies like <code>AdministratorAccess</code>. We'll grant only the exact permissions this Lambda needs.
+</Callout>
+
+<Steps>
+  <Step>
+    ## Create the IAM role
+
+1. Go to **IAM → Roles → Create role**
+2. **Trusted entity:** AWS service
+3. **Use case:** **Lambda**
+4. Click on **Next**
+5. Skip to Step 3 by clicking on **Name, review and create** on the step indicator
+6. **Role name**: `beetroot-ingest-role`
+7. Click **Create role**
+  </Step>
+
+  <Step>
+## Add logging permissions
+
+1. Open the role: **IAM → Roles → `beetroot-ingest-role`**
+2. Go to **Permissions → Add permissions → Attach policies**
+3. Select: <code>AWSLambdaBasicExecutionRole</code>
+4. Click **Add Permissions**
+  </Step>
+
+  <Step>
+  ## Create the permissions policy
+
+In this step, you will build the policy yourself using the **visual editor**, then we’ll also provide the final JSON so you can verify your work.
+
+### Open the visual policy editor
+
+1. Open the role: **IAM → Roles → beetroot-ingest-role**
+2. Click **Add permissions → Create inline policy**
+3. Choose the **Visual** editor (not JSON)
+
+<Tabs items={["S3: Raw (Read)", "S3: Thumbs (Write)", "DynamoDB permissions", "Rekognition permissions"]} groupId="iam-editor" persist>
+  <Tab value="S3: Raw (Read)">
+
+    1. Select service: <b>S3</b>
+
+    2. Under <b>Actions</b>:
+       - Expand <b>Read</b>
+       - Select: <code>GetObject</code>
+
+    3. Under <b>Resources</b>:
+       - Choose <b>Specific</b>
+       - In the <b>Object</b> section, click <b>Add ARN</b>
+
+    4. In the <b>Add ARN</b> popup, fill:
+       - <b>Resource bucket name:</b> <code>beetroot-raw</code>
+       - <b>Resource object name:</b> <code>photos-raw/*</code>
+
+       The ARN should resolve to:
+       - <b>Resource ARN:</b> <code>arn:aws:s3:::beetroot-raw/photos-raw/*</code>
+
+    5. Click <b>Add</b> to save the ARN.
+
+    6. Click **Add additional permissions** (we will add S3 Thumbs Bucket next)
+    <Callout type="tip" title="Why two S3 resource entries?">
+We read only from <code> photos-raw/* </code> and write only to <code> faces-thumbs/* </code>. This keeps access tightly scoped.
+    </Callout>
+  </Tab>
+
+  <Tab value="S3: Thumbs (Write)">
+    1. Select service: <b>S3</b>
+
+    2. Under <b>Actions</b>:
+       - Expand <b>Write</b>
+       - Select: <code>PutObject</code>
+
+    3. Under <b>Resources</b>:
+       - Choose <b>Specific</b>
+       - In the <b>Object</b> section, click <b>Add ARN</b>
+
+    4. In the <b>Add ARN</b> popup, fill:
+       - <b>Resource bucket name:</b> <code>beetroot-thumbs</code>
+       - <b>Resource object name:</b> <code>faces-thumbs/*</code>
+
+       The ARN should resolve to:
+       - <b>Resource ARN:</b> <code>arn:aws:s3:::beetroot-thumbs/faces-thumbs/*</code>
+
+    5. Click <b>Add</b> to save the ARN.
+
+    6. Click **Add additional permissions** (we will add DynamoDB next)
+  </Tab>
+  <Tab value="S3 permissions">
+    1. Select service: **S3**
+
+    2. Under **Actions**, allow:
+
+        * `GetObject`
+        * `PutObject`
+
+    3. Under **Resources**, click **Add ARN** and add two resource entries:
+
+        * **Raw photos (read):**
+
+            Bucket: `beetroot-raw`
+
+            Object: `photos-raw/*`
+        * **Thumbnails (write):**
+
+            Bucket: `beetroot-thumbs`
+
+            Object: `faces-thumbs/*`
+
+    4. Click **Add additional permissions** (we will add DynamoDB next)
+
+
+
+  </Tab>
+
+  <Tab value="DynamoDB permissions">
+    1. Select service: <b>DynamoDB</b>
+
+    2. Under <b>Actions</b>:
+       - Expand <b>Read</b> and select:
+         - <code>GetItem</code>
+         - <code>Query</code>
+       - Expand <b>Write</b> and select:
+         - <code>PutItem</code>
+         - <code>UpdateItem</code>
+
+    3. Under <b>Resources</b>:
+       - Choose <b>Specific</b>
+       - In the <b>Table</b> section, click <b>Add ARN</b>
+
+    4. In the <b>Add ARN</b> popup, add these tables one by one (same region: <code>us-east-1</code>):
+       - <b>Table name:</b> <code>Persons</code>
+         - <b>Resource ARN:</b> <code>arn:aws:dynamodb:us-east-1:*:table/Persons</code>
+       - <b>Table name:</b> <code>Photos</code>
+         - <b>Resource ARN:</b> <code>arn:aws:dynamodb:us-east-1:*:table/Photos</code>
+       - <b>Table name:</b> <code>Occurrences</code>
+         - <b>Resource ARN:</b> <code>arn:aws:dynamodb:us-east-1:*:table/Occurrences</code>
+
+    5. Click <b>Add</b> to save the ARNs, then click <b>Next</b>.
+
+    <Callout type="tip" title="Why Query is needed">
+      The ingestion Lambda uses <code>Query</code> when reading occurrence mappings by <code>personId</code>,
+      and may use lookups during idempotency checks.
+    </Callout>
+  </Tab>
+
+  <Tab value="Rekognition permissions">
+    1. Select service: <b>Rekognition</b>
+
+    2. Under <b>Actions</b>:
+       - Expand <b>Read</b> and select:
+         - <code>DetectFaces</code>
+         - <code>SearchFacesByImage</code>
+       - Expand <b>Write</b> and select:
+         - <code>IndexFaces</code>
+
+    3. Under <b>Resources</b>:
+       - Choose <b>All resources</b>
+
+    4. Click <b>Next</b> to continue.
+
+    <Callout type="info" title="Why All resources for Rekognition?">
+      In IAM, many Rekognition actions don't support scoping to a single collection ARN in the visual editor.
+      The least-privilege approach here is restricting the <b>actions</b> to only what we need.
+    </Callout>
+  </Tab>
+</Tabs>
+
+  </Step>
+
+  <Step>
+  ## Save the inline policy
+
+1. Click **Next**
+1. **Policy name:** <code>BeetrootIngestPolicy</code>
+2. Click **Create policy**
+  </Step>
+</Steps>
+
+## Full policy JSON
+
+You can verify your policy configuration by switching to the **JSON** editor and comparing it against the policy document below. Alternatively, paste the following JSON directly to attach all required permissions at once.
+
+> Replace bucket names if yours differ.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadRawPhotos",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ["arn:aws:s3:::beetroot-raw/photos-raw/*"]
+    },
+    {
+      "Sid": "WriteFaceThumbnails",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": ["arn:aws:s3:::beetroot-thumbs/faces-thumbs/*"]
+    },
+    {
+      "Sid": "DynamoDBAccess",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:GetItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:*:table/Persons",
+        "arn:aws:dynamodb:us-east-1:*:table/Photos",
+        "arn:aws:dynamodb:us-east-1:*:table/Occurrences"
+      ]
+    },
+    {
+      "Sid": "RekognitionFaceOps",
+      "Effect": "Allow",
+      "Action": [
+        "rekognition:DetectFaces",
+        "rekognition:SearchFacesByImage",
+        "rekognition:IndexFaces"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+## Checkpoint
+
+In the role's **Permissions** tab, you should see:
+- <code>AWSLambdaBasicExecutionRole</code>
+- <code>BeetrootIngestPolicy</code>

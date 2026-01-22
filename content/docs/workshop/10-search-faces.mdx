@@ -1,0 +1,173 @@
+---
+title: "Match Faces"
+description: "Use Rekognition SearchFacesByImage to check if each cropped face already exists in the collection."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+For every cropped face thumbnail, the ingestion Lambda should:
+
+1. Run `SearchFacesByImage` against your Rekognition collection
+2. Log one of these outcomes:
+   - <b>Match</b>: returns an existing `FaceId`
+   - <b>NoMatch</b>: no similar face found (we handle this in the next phase)
+
+<Callout type="info" title="Important Note">
+  `SearchFacesByImage` can only match faces that are already indexed in the
+  collection. If the collection is empty, you will see <b>NoMatch</b> for
+  everything — that’s expected until the next phase (`IndexFaces`).
+</Callout>
+
+## Setup
+
+### Environment variables
+
+- `REKOGNITION_COLLECTION_ID` = `beetroot-faces`
+- `FACE_MATCH_THRESHOLD` = `95`
+
+<Callout type="tip" title="Why 95?">
+  A higher threshold is safer: fewer wrong groupings, even if it creates more
+  “new person” cases.
+</Callout>
+
+## Search Code
+
+### What this update does
+
+This phase adds one step inside the face-cropping loop:
+
+- Use the in-memory cropped face bytes (`BytesIO`) to search the collection
+- Log whether it matches an existing face
+
+We do <b>not</b> create people records yet. This phase is only: <b>match vs no-match logging</b>.
+
+## Part 1: Read config once
+
+Add these lines near the top of `lambda_handler` (before looping faces), so we don’t read env vars repeatedly.
+
+```python
+PHOTOS_TABLE_NAME = os.environ.get("PHOTOS_TABLE", "Photos")
+RAW_PREFIX = os.environ.get("RAW_PREFIX", "photos-raw/")
+
+collection_id = os.environ["REKOGNITION_COLLECTION_ID"] # [!code ++]
+threshold = float(os.environ.get("FACE_MATCH_THRESHOLD", "95")) # [!code ++]
+```
+
+<Callout type="warning" title="Collection ID is required">
+  Use `os.environ["REKOGNITION_COLLECTION_ID"]` so the function fails fast if
+  it’s missing.
+</Callout>
+
+## Part 2: Search after cropping
+
+Place the code blocks below right after:
+
+```python
+out = BytesIO()
+face_im.save(out, format="JPEG", quality=90)
+out.seek(0)
+```
+
+### 2.1 The Search request
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase10-search" persist>
+
+  <Tab value="Code">
+
+```python
+search_resp = rek.search_faces_by_image(
+    CollectionId=collection_id,
+    Image={"Bytes": out.getvalue()},
+    MaxFaces=1,
+    FaceMatchThreshold=threshold,
+)
+```
+
+  </Tab>
+
+<Tab value="Input">
+
+    - `CollectionId`: your collection (ex: `beetroot-faces`)
+    - `Bytes`: the cropped face JPEG (in-memory)
+    - `MaxFaces=1`: return only the best match
+    - `FaceMatchThreshold=95`: require high similarity
+
+</Tab>
+
+  <Tab value="Output">
+
+- `FaceMatches` : list of matches (empty if none)
+- If present, the top item contains:
+  - `Face.FaceId`
+  - `Similarity`
+
+</Tab>
+
+</Tabs>
+
+### 2.2 Read the result and log
+
+```python
+matches = search_resp.get("FaceMatches", [])
+if matches:
+    top = matches[0]
+    face_id = top["Face"]["FaceId"]
+    similarity = top.get("Similarity")
+    print(f"Match: idx={idx} faceId={face_id} similarity={similarity}")
+else:
+    print(f"NoMatch: idx={idx} threshold={threshold}")
+    # Index code insert here
+```
+
+## Search Code Snippet
+
+```python
+out = BytesIO()
+face_im.save(out, format="JPEG", quality=90)
+out.seek(0)
+
+face_bytes = out.getvalue() # [!code ++]
+# [!code ++]
+# 1) Search for match # [!code ++]
+search_resp = rek.search_faces_by_image( # [!code ++]
+    CollectionId=collection_id, # [!code ++]
+    Image={"Bytes": face_bytes}, # [!code ++]
+    MaxFaces=1, # [!code ++]
+    FaceMatchThreshold=threshold, # [!code ++]
+) # [!code ++]
+# [!code ++]
+# 2) Match or no match # [!code ++]
+matches = search_resp.get("FaceMatches", []) # [!code ++]
+if matches: # [!code ++]
+    top = matches[0] # [!code ++]
+    person_id = top["Face"]["FaceId"]  # personId == FaceId (your chosen rule) # [!code ++]
+    similarity = top.get("Similarity") # [!code ++]
+    print(f"Match: idx={idx} personId={person_id} similarity={similarity}") # [!code ++]
+else: # [!code ++]
+    print(f"NoMatch: idx={idx} threshold={threshold} -> indexing") # [!code ++]
+    # 2) No match -> Index face into the collection
+    # Index code insert here
+```
+
+---
+
+## Common issues
+
+<Tabs items={["AccessDenied", "ResourceNotFound", "Always NoMatch"]} groupId="phase10-issues" persist>
+  <Tab value="AccessDenied">
+    `AccessDeniedException` → your Lambda role is missing <code>rekognition:SearchFacesByImage</code>.
+  </Tab>
+
+<Tab value="ResourceNotFound">
+  `ResourceNotFoundException` → wrong <code>REKOGNITION_COLLECTION_ID</code> or
+  wrong region.
+</Tab>
+
+  <Tab value="Always NoMatch">
+    Normal if you haven’t indexed any faces yet (next phase).
+  </Tab>
+</Tabs>

@@ -1,0 +1,122 @@
+---
+title: "Ingest Lambda + S3 Trigger"
+description: "Wire the raw S3 upload events to the ingestion Lambda and verify the event shows up in logs."
+---
+
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+Create the **ingestion Lambda** and attach an S3 trigger so every upload to <code>photos-raw/</code> automatically runs the function.
+
+## Prerequisites
+
+You should already have:
+
+- S3 buckets: <code>beetroot-raw</code> and <code>beetroot-thumbs</code>
+- DynamoDB tables: <code>Photos</code>, <code>Persons</code>, <code>Occurrences</code>
+- Rekognition collection: <code>beetroot-faces</code>
+- Ingest Lambda IAM role: `beetroot-ingest-role`
+
+<Steps>
+  <Step>
+
+## Create Ingest Lambda
+
+1. Go to **Lambda → Create function**
+2. Select **Author from scratch**
+3. Fill:
+   - **Function name**: <code>beetroot-ingest</code>
+   - **Runtime**: Python 3.14
+4. Under **Permissions**:
+   - Click **Change default execution role**
+   - Select **Use an existing role**
+   - Choose your role: <code>beetroot-ingest-role</code> (the role you created)
+5. Click **Create function**
+
+6. The Lambda function would have the following code inside it:
+
+```python
+import json
+
+def lambda_handler(event, context):
+    print("S3 EVENT:")
+    print(json.dumps(event))
+    return {"ok": True}
+```
+
+7. To check if the Lambda function is working:
+   - In the Lambda page, open the **Test** tab (above the code editor).
+   - You can keep the default test event or edit it
+   - Click on **Test** button
+   - After it runs, open **Details** to see the response and logs. Expected response:
+
+   ```json
+   {
+     "statusCode": 200,
+     "body": "\"Hello from Lambda!\""
+   }
+   ```
+
+  </Step>
+
+  <Step>
+
+## Add S3 trigger
+
+1. Open **Lambda → `beetroot-ingest`**
+2. Click **Add trigger**
+3. Select **S3**
+4. Bucket: **<code>beetroot-raw</code>**
+5. Event type: **All object create events** (PUT is also fine)
+6. Prefix: **<code>photos-raw/</code>**
+7. Acknowledge the permission prompt → click **Add**
+
+<Callout type="info" title="Why set a prefix?">
+  The prefix <code>photos-raw/</code> ensures the Lambda only triggers for
+  uploads inside that folder, not for unrelated objects in the bucket.
+</Callout>
+
+### Checkpoint
+
+This is what you should see after adding the S3 trigger:
+
+![beetroot-ingest Lambda has an S3 trigger](/images/architecture/ingest-lambda-s3-trigger-function-overview.png)
+
+  </Step>
+
+  <Step>
+## End-to-End Test
+
+Upload one new photo (so logs are easy to read):
+
+```bash
+aws s3 cp ./beetroot-test-photos/group1.jpg s3://beetroot-raw/photos-raw/ --region us-east-1
+```
+
+  </Step>
+
+  <Step>
+
+## Verify via CloudWatch Logs
+
+1. Open **Lambda → `beetroot-ingest`**
+2. Go to **Monitor → View CloudWatch logs**
+3. Open the latest log stream
+
+In the logs, confirm you see `S3 EVENT: {'Records': ...}`
+![CloudWatch S3 Trigger Logs](/images/architecture/cloudwatch-ingest-s3-trigger.png)
+
+<Callout type="warning" title="If the trigger doesn't fire">
+  Common causes:
+  <ul>
+    <li>Wrong bucket or prefix</li>
+    <li>Lambda is in a different region than the bucket</li>
+    <li>Trigger was not added (check the Lambda designer)</li>
+  </ul>
+  Fix this before moving on, because the next phases depend on this working.
+</Callout>
+
+  </Step>
+
+</Steps>

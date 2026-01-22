@@ -1,0 +1,513 @@
+---
+title: "Photo Idempotency in DynamoDB"
+description: "Create a stable photoId from S3 uploads and write exactly one record per photo into DynamoDB."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+When a photo is uploaded to <code>s3://beetroot-raw/photos-raw/</code>, the ingestion Lambda should:
+
+1. Extract <code>bucket</code> and <code>key</code> from the S3 event
+2. Ignore any uploads not under <code>photos-raw/</code>
+3. Compute a stable <code>photoId</code>
+4. Write one item into the <code>Photos</code> table
+5. Avoid double-processing if the same upload triggers more than once
+
+## Why idempotency matters
+
+S3 events can sometimes be delivered more than once.
+If we write to DynamoDB without protection, we may create duplicates and corrupt our data.
+
+We’ll solve this by using:
+
+- A deterministic <code>photoId</code> (same file path → same ID)
+- A conditional DynamoDB write (<code>attribute_not_exists(photoId)</code>)
+
+<Callout type="info" title="How we avoid duplicates (idempotency)">
+  We make uploads safe to retry by doing two things:
+
+- Deterministic <code>photoId</code>:
+  the ID is generated from <code>bucket + key</code>, so same S3 path
+  always produces same <code>photoId</code>.
+
+- <b>Conditional write:</b> DynamoDB writes the item only if it doesn’t
+  already exist using <code>attribute_not_exists(photoId)</code>. If the same upload triggers
+  again, we skip it instead of creating a duplicate.
+</Callout>
+
+## Add Environment Variables (Lambda Console)
+
+Go to **Lambda → `beetroot-ingest` → Configuration → Environment variables** and add:
+
+- <code>PHOTOS_TABLE</code> = <code>Photos</code>
+- <code>RAW_PREFIX</code> = <code>photos-raw/</code>
+
+<Callout type="tip" title="Why add environment variables?">
+  Hard-coding resources names makes code harder to reuse. Using environment
+  variables keeps it clean and configurable.
+</Callout>
+
+## Lambda Code
+
+### What this code does?
+
+- It reads the S3 event
+- Generates a stable `photoId`
+- Inserts a record into DynamoDB only if it doesn’t already exist
+
+## Part 1: Imports
+
+This section brings in everything we need:
+
+- standard Python utilities (JSON, hashing, timestamps)
+- URL decoding for S3 keys
+  - AWS SDK (`boto3`) + error type for clean handling
+
+```python
+import json
+import os
+import hashlib
+from datetime import datetime, timezone
+from urllib.parse import unquote_plus
+
+import boto3
+from botocore.exceptions import ClientError
+```
+
+<Callout type="info" title="Why unquote_plus?">
+  S3 object keys in event payloads can be URL-encoded (for example, spaces may
+  appear as <code>+</code>). We decode them so we always hash and store the real
+  path.
+</Callout>
+
+## Part 2: AWS clients + env vars
+
+We create the DynamoDB resource once (outside the handler) so it can be reused across invocations.
+
+We also read configuration from environment variables (with safe defaults).
+
+```python
+ddb = boto3.resource("dynamodb")
+
+# Use env var if present, otherwise default to "Photos"
+PHOTOS_TABLE = os.environ.get("PHOTOS_TABLE", "Photos")
+RAW_PREFIX = os.environ.get("RAW_PREFIX", "photos-raw/")
+
+photos_table = ddb.Table(PHOTOS_TABLE)
+```
+
+## Part 3: `photoId` (Idempotency key)
+
+We generate a stable ID based on the S3 object path.
+Same `bucket + key` will always produce the same `ID`.
+
+```python
+def make_photo_id(bucket: str, key: str) -> str:
+    """
+    Deterministic, stable photoId.
+    We use SHA-256(bucket/key) but keep only first 20 hex chars (short + stable).
+    """
+    raw = f"{bucket}/{key}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:20]
+```
+
+### Why this matters
+
+S3 can sometimes trigger the same upload more than once.
+A deterministic <code>photoId</code> lets us detect “this is the same file again”.
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase7-photoid" persist>
+
+<Tab value="Code">
+
+```python
+raw = f"{bucket}/{key}".encode("utf-8")
+photo_id = hashlib.sha256(raw).hexdigest()[:20]
+```
+
+</Tab>
+
+<Tab value="Input">
+  Example:
+
+- <code>bucket = "beetroot-raw"</code>
+- <code>key = "photos-raw/group1.jpg"</code>
+
+</Tab>
+
+<Tab value="Output">
+
+Example output:
+
+- <code>photoId = "a1f09c2b7e3d4a91b6c2"</code>
+
+It will be the same every time for the same bucket/key.
+
+</Tab>
+
+</Tabs>
+
+## Part 4: Handler entry + read event records
+
+The Lambda handler receives the event payload.
+For S3 triggers, it includes a list called <code>Records</code>.
+
+```python
+def lambda_handler(event, context):
+    records = event.get("Records", [])
+    if not records:
+        print("No Records found; nothing to do.")
+        return {"statusCode": 200, "body": "no records"}
+```
+
+### Why we check `Records`
+
+- If the function is triggered manually (Test button), there may be no S3 records.
+- This avoids errors and keeps the handler safe.
+
+## Part 5: Parse `bucket + key`
+
+We loop through each record (sometimes there can be more than one).
+Then we extract the bucket and object key.
+
+```python
+for r in records:
+    s3 = r.get("s3", {})
+    bucket = s3.get("bucket", {}).get("name")
+    key = s3.get("object", {}).get("key")
+
+    if not bucket or not key:
+        print("Skipping record: missing bucket/key")
+        continue
+
+    # S3 keys in events are URL-encoded sometimes
+    key = unquote_plus(key)
+
+    # Only process uploads under photos-raw/
+    if not key.startswith(RAW_PREFIX):
+        print(f"Skipping key not under RAW_PREFIX: {key}")
+        continue
+```
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase7-parse" persist> <Tab value="Code">
+
+```python
+bucket = s3.get("bucket", {}).get("name")
+key = s3.get("object", {}).get("key")
+key = unquote_plus(key)
+
+if not key.startswith(RAW_PREFIX):
+    continue
+```
+
+  </Tab>
+
+<Tab value="Input">
+  Example event record:
+
+- bucket name: <code>beetroot-raw</code>
+- key: <code>photos-raw/family+photo.jpg</code>
+
+</Tab>
+
+<Tab value="Output">
+
+After decoding:
+
+- key becomes: <code>photos-raw/family photo.jpg</code>
+
+Prefix check:
+
+- passes because it starts with <code>photos-raw/</code>
+
+</Tab>
+
+  </Tabs>
+
+## Part 6: Build the DynamoDB item
+
+We create a record to store metadata about the uploaded photo.
+
+```python
+photo_id = make_photo_id(bucket, key) ## [!code highlight]
+uploaded_at = datetime.now(timezone.utc).isoformat()
+
+item = {
+    "photoId": photo_id,
+    "s3Bucket": bucket,
+    "s3Key": key,
+    "uploadedAt": uploaded_at,
+}
+```
+
+### What gets stored
+
+- <code>photoId</code>: stable ID (for idempotency)
+- <code>s3Bucket</code> + <code>s3Key</code>: where the photo lives
+- <code>uploadedAt</code>: timestamp for debugging and ordering
+
+## Part 7: Conditional write
+
+This is where we prevent duplicates.
+
+We write the item only if it does not already exist.
+
+```python
+try:
+    photos_table.put_item(
+        Item=item,
+        ConditionExpression="attribute_not_exists(photoId)", ## [!code highlight]
+    )
+    print(f"Photos: inserted photoId={photo_id} key={key}")
+except ClientError as e:
+    code = e.response.get("Error", {}).get("Code", "Unknown")
+    if code == "ConditionalCheckFailedException":
+        print(f"Photos: already exists, skipping photoId={photo_id} key={key}")
+        continue
+    print("DynamoDB put_item failed:", str(e))
+    raise
+```
+
+1. **First upload (record does not exist yet)**
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase7-conditional-first" persist>
+
+<Tab value="Code">
+
+```python
+photos_table.put_item(
+    Item=item,
+    ConditionExpression="attribute_not_exists(photoId)",
+)
+```
+
+</Tab>
+
+<Tab value="Input">
+
+- <code>bucket = "beetroot-raw"</code>
+- <code>key = "photos-raw/group1.jpg"</code>
+
+</Tab>
+
+<Tab value="Output">
+* DynamoDB write succeeds
+* Logs show: `inserted`
+
+</Tab>
+
+</Tabs>
+
+2. **Duplicate upload (same photo triggers again)**
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase7-conditional-duplicate" persist>
+
+<Tab value="Code">
+
+```python
+if code == "ConditionalCheckFailedException":
+    print("already exists, skipping")
+```
+
+</Tab>
+
+<Tab value="Input">
+
+- <code>bucket = "beetroot-raw"</code>
+- <code>key = "photos-raw/group1.jpg"</code>
+
+The same S3 key triggers again, hence creating an item with the same `photoId` which already exists in DynamoDB
+
+</Tab>
+
+<Tab value="Output">
+* DynamoDB throws `ConditionalCheckFailedException`
+* We treat it as a normal "skip" (not a crash)
+* Logs show: `already exists`
+
+</Tab>
+
+</Tabs>
+
+## Part 8: Return response
+
+Finally, we return a normal success response.
+
+```python
+return {"statusCode": 200, "body": "ingest lambda with s3 trigger ok"}
+```
+
+<Callout type="tip" title="Why always return 200?">
+  For S3 triggers, Lambda retries on errors. Returning success after handling
+  duplicates avoids unnecessary retries.
+</Callout>
+
+## Lambda Code
+
+Having this code in your lambda function, click on `Deploy` to save it.
+
+```python title="beetroot-ingest/lambda_function.py" lineNumbers
+import json
+import os
+import hashlib
+from datetime import datetime, timezone
+from urllib.parse import unquote_plus
+
+import boto3
+from botocore.exceptions import ClientError
+
+
+ddb = boto3.resource("dynamodb")
+
+# Use env var if present, otherwise default to "Photos"
+PHOTOS_TABLE = os.environ.get("PHOTOS_TABLE", "Photos")
+RAW_PREFIX = os.environ.get("RAW_PREFIX", "photos-raw/")
+
+photos_table = ddb.Table(PHOTOS_TABLE)
+
+
+def make_photo_id(bucket: str, key: str) -> str:
+    """
+    Deterministic, stable photoId.
+    We use SHA-256(bucket/key) but keep only first 20 hex chars (short + stable).
+    """
+    raw = f"{bucket}/{key}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:20]
+
+
+def lambda_handler(event, context):
+    records = event.get("Records", [])
+    if not records:
+        print("No Records found; nothing to do.")
+        return {"statusCode": 200, "body": "no records"}
+
+    for r in records:
+        s3 = r.get("s3", {})
+        bucket = s3.get("bucket", {}).get("name")
+        key = s3.get("object", {}).get("key")
+
+        if not bucket or not key:
+            print("Skipping record: missing bucket/key")
+            continue
+
+        # S3 keys in events are URL-encoded sometimes
+        key = unquote_plus(key)
+
+        # Only process uploads under photos-raw/
+        if not key.startswith(RAW_PREFIX):
+            print(f"Skipping key not under RAW_PREFIX: {key}")
+            continue
+
+        photo_id = make_photo_id(bucket, key)
+        uploaded_at = datetime.now(timezone.utc).isoformat()
+
+        item = {
+            "photoId": photo_id,
+            "s3Bucket": bucket,
+            "s3Key": key,
+            "uploadedAt": uploaded_at,
+        }
+
+        try:
+            photos_table.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(photoId)",
+            )
+            print(f"Photos: inserted photoId={photo_id} key={key}")
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "Unknown")
+            if code == "ConditionalCheckFailedException":
+                print(f"Photos: already exists, skipping photoId={photo_id} key={key}")
+                continue
+            print("DynamoDB put_item failed:", str(e))
+            raise
+
+    return {"statusCode": 200, "body": "ingest lambda with s3 trigger ok"}
+```
+
+## Step 3: Test (two quick runs)
+
+<Steps>
+
+  <Step>
+
+    ### Upload a new file (insert)
+
+    Upload one new photo:
+
+    ```bash
+    aws s3 cp ./v2-test-photos/group2.jpg s3://beetroot-raw/photos-raw/.jpg --region us-east-1
+    ```
+
+    In **CloudWatch logs**, you should see:
+
+    - <code>Photos: inserted photoId=...</code>
+
+  </Step>
+
+  <Step>
+
+### Upload same key again (skip)
+
+Upload the same key again (same destination path):
+
+```bash
+aws s3 cp ./v2-test-photos/group2.jpg s3://beetroot-raw/photos-raw/.jpg --region us-east-1
+```
+
+In logs, you should see:
+
+- <code>Photos: already exists, skipping ...</code>
+
+<Callout type="info" title="Where to confirm the record was written">
+  Go to <b>DynamoDB → Tables → Photos → Explore items</b> and confirm a new item
+  exists with:
+  <ul>
+    <li>
+      <code>photoId</code>
+    </li>
+    <li>
+      <code>s3Bucket</code>
+    </li>
+    <li>
+      <code>s3Key</code>
+    </li>
+    <li>
+      <code>uploadedAt</code>
+    </li>
+  </ul>
+</Callout>
+
+  </Step>
+
+</Steps>
+
+## Common mistakes
+
+<Tabs items={["Missing env var", "Wrong prefix", "Long photoId"]} groupId="phase7-common" persist>
+
+<Tab value="Missing env var">
+  If you see errors such as missing table name, ensure: -{" "}
+  <code>PHOTOS_TABLE</code> exists in Lambda environment variables - Your code
+  uses a safe fallback, <code>os.environ.get("PHOTOS_TABLE", "Photos")</code>
+</Tab>
+
+<Tab value="Wrong prefix">
+  If the Lambda logs show “Skipping key not under RAW_PREFIX”, confirm: - Upload
+  path starts with <code>photos-raw/</code>- <code>RAW_PREFIX</code> is set
+  correctly (or left as default)
+</Tab>
+
+<Tab value="Long photoId">
+    A full SHA-256 hex is 64 chars.
+    We intentionally shorten it using:
+      - <code>hashlib.sha256(...).hexdigest()[:20]</code>
+
+    This keeps the id deterministic but easier to read in DynamoDB / logs.
+
+</Tab>
+</Tabs>

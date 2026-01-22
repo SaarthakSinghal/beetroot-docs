@@ -1,0 +1,246 @@
+---
+title: "AWS Resources"
+description: "Create the buckets, tables, and Rekognition collection."
+---
+
+import Link from "fumadocs-core/link";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Callout } from "fumadocs-ui/components/callout";
+
+## Goal
+
+Create the AWS resources the backend will rely on:
+
+- **S3** for raw uploads and thumbnails
+- **DynamoDB** for photos, people, and occurrences
+- **Rekognition Collection** for face matching
+
+<Callout type="warning" title="Use one region everywhere">
+  Create ALL resources in the same region (recommended: <code>us-east-1</code>).
+  Rekognition collections are region-specific, and mismatches are a common
+  failure.
+</Callout>
+
+## Minimum prerequisites
+
+Make sure you have:
+
+- AWS account access
+- AWS CLI configured and working
+- A single AWS region chosen (use the same region for everything in v2)
+
+Quick check (CLI):
+
+- `aws sts get-caller-identity` should return your account details.
+
+## AWS CLI setup
+
+This project uses AWS CLI for Rekognition collection creation and verification. If your AWS CLI is not configured, complete this section before continuing.
+
+### Step 1: Install AWS CLI
+
+- Download and install **AWS CLI v2** for your OS from the [official AWS site](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html#getting-started-install-instructions).
+
+- After installation, verify:
+
+```bash
+aws --version
+```
+
+You should see output like: `aws-cli/2.x.x ...`
+
+### Step 2: Configure credentials
+
+Run:
+
+```bash
+aws configure
+```
+
+Enter:
+
+- **AWS Access Key ID**: (from your IAM user)
+- **AWS Secret Access Key**: (from your IAM user)
+- **Default region name**: `us-east-1`
+- **Default output format**: `json`
+
+<Callout type="tip" title="Recommended default region">
+  Set the default region to <code>us-east-1</code> so you don’t forget the
+  region in commands.
+</Callout>
+
+### Step 3: Verify you're authenticated
+
+Run:
+
+```bash
+aws sts get-caller-identity
+```
+
+Expected output contains your:
+
+- `Account`
+- `Arn`
+- `UserId`
+
+If this fails, your credentials are not set up correctly.
+
+## Service Map
+
+### S3
+
+We will use two buckets:
+
+- **Raw bucket** (prefix: <code>photos-raw/</code>) : stores original uploads
+- **Thumbnails bucket** (prefix: <code>faces-thumbs/</code>): stores cropped face thumbnails and processed outputs
+
+### DynamoDB
+
+We will create three tables:
+
+- `Photos` table: one record per uploaded photo
+- `Persons` table: one record per person cluster
+- `Occurrences` table: mapping of person ↔ photo with face metadata
+
+### Rekognition
+
+We will create one **Collection**:
+
+- `beetroot-faces`
+
+<Callout>
+  Note: S3 “folders” are just prefixes. We'll create them by uploading a
+  placeholder object if needed.
+</Callout>
+
+## Create resources (step-by-step)
+
+<Tabs items={["S3 (Console)", "DynamoDB (Console)", "Rekognition (CLI)"]} groupId="setup-method" persist>
+  <Tab value="S3 (Console)">
+    <ol>
+      <li>
+        Create bucket : `beetroot-raw`
+          1. Go to <b>S3 → Buckets → Create bucket</b>
+          2. <b>Bucket name:</b> <code>beetroot-raw</code>
+          3. <b>AWS Region:</b> <code>us-east-1</code>
+          4. <b>Block all public access:</b> ON
+          5. <b>Versioning:</b> ON
+          6. <b>Default encryption:</b> ON (SSE-S3 is fine)
+          7. Click <b>Create bucket</b>
+      </li>
+
+      <li>
+        Create bucket : `beetroot-thumbs`
+          1. Go to <b>S3 → Buckets → Create bucket</b>
+          2. <b>Bucket name:</b> <code>beetroot-thumbs</code>
+          3. <b>AWS Region:</b> <code>us-east-1</code>
+          4. <b>Block all public access:</b> ON
+          5. <b>Versioning:</b> ON
+          6. <b>Default encryption:</b> ON (SSE-S3 is fine)
+          7. Click <b>Create bucket</b>
+      </li>
+    </ol>
+
+    <Callout type="tip" title="Naming tip">
+      S3 bucket names must be globally unique.
+    </Callout>
+
+  </Tab>
+
+  <Tab value="DynamoDB (Console)">
+    <ol>
+      <li>
+        Create table : <code>Persons</code>
+        <ul>
+          <li>Go to <b>DynamoDB → Tables → Create table</b></li>
+          <li><b>Table name:</b> <code>Persons</code></li>
+          <li><b>Partition key:</b> <code>personId</code> (String)</li>
+          <li><b>Capacity mode:</b> On-demand</li>
+          <li>Click <b>Create table</b></li>
+        </ul>
+      </li>
+
+      <li>
+        Create table : <code>Photos</code>
+        <ul>
+          <li>Go to <b>DynamoDB → Tables → Create table</b></li>
+          <li><b>Table name:</b> <code>Photos</code></li>
+          <li><b>Partition key:</b> <code>photoId</code> (String)</li>
+          <li><b>Capacity mode:</b> On-demand</li>
+          <li>Click <b>Create table</b></li>
+        </ul>
+      </li>
+
+      <li>
+        Create table : <code>Occurrences</code>
+        <ul>
+          <li>Go to <b>DynamoDB → Tables → Create table</b></li>
+          <li><b>Table name:</b> <code>Occurrences</code></li>
+          <li><b>Partition key:</b> <code>personId</code> (String)</li>
+          <li><b>Sort key:</b> <code>photoId</code> (String)</li>
+          <li><b>Capacity mode:</b> On-demand</li>
+          <li>Click <b>Create table</b></li>
+        </ul>
+      </li>
+    </ol>
+
+    <Callout type="info" title="Why this key design?">
+      This design makes the later API query simple:
+      <ul>
+        <li><b>List people</b> → read from <code>Persons</code></li>
+        <li><b>Photos for a person</b> → query <code>Occurrences</code> by <code>personId</code></li>
+      </ul>
+    </Callout>
+
+  </Tab>
+
+  <Tab value="Rekognition (CLI)">
+    <Callout type="info" title="Why CLI here?">
+      Rekognition collections cannot be created via the AWS Console, they're only available through the CLI or SDK.
+    </Callout>
+
+    Skip step 1 if you have AWS CLI installed in your device.
+    <ol>
+      <li>
+        <b>Open CloudShell in us-east-1</b>
+        <ul>
+          <li>In the AWS Console top bar, open <b>CloudShell</b></li>
+          <li>Ensure the region is <code>us-east-1</code></li>
+        </ul>
+      </li>
+
+      <li>
+        <b>Create the collection</b>
+        <br />
+        Run:
+
+        ```bash
+        aws rekognition create-collection `
+          --collection-id "beetroot-faces" `
+          --region us-east-1
+        ```
+      </li>
+
+      <li>
+        <b>Verify the collection exists</b>
+        <br />
+        Run:
+
+        ```bash
+        aws rekognition list-collections --region us-east-1
+        ```
+
+        Confirm you see: <code>beetroot-faces</code>
+      </li>
+    </ol>
+
+  </Tab>
+</Tabs>
+
+## Checkpoint
+
+By now, you should have:
+
+- 2 S3 buckets (raw + thumbs)
+- 3 DynamoDB tables (`Photos`, `People`, `Occurrences`)
+- 1 Rekognition collection

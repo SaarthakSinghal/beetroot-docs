@@ -1,0 +1,309 @@
+---
+title: "Lambda Layer: Pillow"
+description: "Add Pillow using a Lambda Layer so the ingestion Lambda can crop face thumbnails."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+Add the <b>Pillow</b> library (Python image processing) to <code>beetroot-ingest</code> using a <b>Lambda Layer</b>, so we can crop face thumbnails in the next phase.
+
+## What is a Lambda Layer?
+
+A <b>Lambda Layer</b> is a separate zip package that contains dependencies (such as `Pillow`).
+You attach it to a Lambda function, and Lambda makes those dependencies available at runtime.
+
+<Callout type="info" title="Important: A Layer is not another Lambda">
+  A Layer is <b>not</b> a new Lambda function. It’s just a dependency bundle
+  that your Lambda can “plug in”.
+</Callout>
+
+### Why we need a layer here?
+
+Cropping an image requires an image library. The default Python Lambda runtime does not include a full image processing library, so we add `Pillow`.
+
+### Where the layer runs?
+
+When you attach a layer:
+
+- Lambda mounts it under <code>/opt</code>
+- For Python, Lambda automatically loads packages placed under <code>/opt/python</code>
+
+<Callout type="info" title="Note">
+
+That’s why our zip must contain a top-level folder named <code>python/</code>.
+
+</Callout>
+
+## What we are building (layer structure)
+
+Your final zip must look like this:
+
+```text
+pillow-layer.zip
+└─ python/
+   ├─ PIL/
+   ├─ Pillow-*.dist-info/
+   └─ ...
+```
+
+<Callout type="info" title="Note">
+
+If <code>python/</code> is missing at the root of the zip, the import will fail.
+
+</Callout>
+
+## Prerequisites
+
+You’ll need:
+
+- AWS CLI configured
+- Your Lambda runtime confirmed (example: <code>python3.14</code>)
+- Docker installed (recommended for all OS)
+
+<Callout type="warning" title="Why Docker is recommended">
+  Lambda runs on Amazon Linux. Some Python libraries (including Pillow) contain
+  native binaries, so building inside a Linux-compatible environment avoids
+  “works locally but fails on Lambda”.
+</Callout>
+
+## Steps
+
+<Steps>
+  <Step>
+
+    ### Step 1: Create the layer folder
+
+Create a folder for the layer and a <code>python/</code> directory inside it.
+
+<Tabs items={["Windows", "macOS", "Linux"]} groupId="layer-steps" persist>
+  <Tab value="Windows">
+
+```bash
+mkdir pillow-layer
+cd pillow-layer
+mkdir python
+```
+
+  </Tab>
+
+  <Tab value="macOS">
+
+```bash
+mkdir -p pillow-layer/python
+cd pillow-layer
+```
+
+  </Tab>
+
+  <Tab value="Linux">
+
+```bash
+mkdir -p pillow-layer/python
+cd pillow-layer
+```
+
+  </Tab>
+</Tabs>
+
+  </Step>
+
+  <Step>
+
+    ### Step 2: Install Pillow into `python/` (Linux-compatible build)
+
+This installs Pillow into the folder that will become the layer content.
+
+<Tabs items={["Windows", "macOS", "Linux"]} groupId="layer-steps" persist>
+  <Tab value="Windows">
+
+```bash
+docker run --rm `
+  -v "${PWD}:/var/task" `
+  -w /var/task `
+  public.ecr.aws/sam/build-python3.14:latest `
+  /bin/sh -c "python -m pip install --upgrade pip && pip install pillow -t python"
+```
+
+  </Tab>
+
+  <Tab value="macOS">
+
+```bash
+docker run --rm \
+  -v "$(pwd):/var/task" \
+  -w /var/task \
+  public.ecr.aws/sam/build-python3.14:latest \
+  /bin/sh -c "python -m pip install --upgrade pip && pip install pillow -t python"
+```
+
+  </Tab>
+
+  <Tab value="Linux">
+
+```bash
+docker run --rm \
+  -v "$(pwd):/var/task" \
+  -w /var/task \
+  public.ecr.aws/sam/build-python3.14:latest \
+  /bin/sh -c "python -m pip install --upgrade pip && pip install pillow -t python"
+```
+
+  </Tab>
+</Tabs>
+
+You should see a folder with name <code>python/PIL/</code>
+
+  </Step>
+
+  <Step>
+    ### Step 3: Zip the layer (zip must contain `python/` at root)
+
+<Tabs items={["Windows", "macOS", "Linux"]} groupId="layer-steps" persist>
+  <Tab value="Windows">
+
+```bash
+Compress-Archive -Path .\python -DestinationPath .\pillow-layer.zip -Force
+```
+
+  </Tab>
+
+  <Tab value="macOS">
+
+```bash
+zip -r pillow-layer.zip python
+```
+
+  </Tab>
+
+  <Tab value="Linux">
+
+```bash
+zip -r pillow-layer.zip python
+```
+
+  </Tab>
+</Tabs>
+
+You should see `pillow-layer.zip` and inside it, the first folder should be `python/`.
+
+  </Step>
+
+    <Step>
+
+### Step 4: Publish the layer
+
+This uploads the zip as a new <b>Layer Version</b> in your region.
+
+<Callout type="tip" title="Match your Lambda runtime">
+
+If your Lambda runtime is not <code>python3.14</code>, change the flag <code>--compatible-runtimes</code> accordingly.
+
+</Callout>
+
+<Tabs items={["Windows", "macOS", "Linux"]} groupId="layer-steps" persist>
+  <Tab value="Windows">
+
+```bash
+aws lambda publish-layer-version `
+  --layer-name beetroot-pillow-py314 `
+  --zip-file fileb://pillow-layer.zip `
+  --compatible-runtimes python3.14 `
+  --region us-east-1
+```
+
+  </Tab>
+
+  <Tab value="macOS">
+
+```bash
+aws lambda publish-layer-version \
+  --layer-name beetroot-pillow-py314 \
+  --zip-file fileb://pillow-layer.zip \
+  --compatible-runtimes python3.14 \
+  --region us-east-1
+```
+
+  </Tab>
+
+  <Tab value="Linux">
+
+```bash
+aws lambda publish-layer-version \
+  --layer-name beetroot-pillow-py314 \
+  --zip-file fileb://pillow-layer.zip \
+  --compatible-runtimes python3.14 \
+  --region us-east-1
+```
+
+  </Tab>
+</Tabs>
+
+You'll get a response containing a `LayerVersionArn`.
+
+  </Step>
+
+  <Step>
+
+### Step 5: Attach the layer to `beetroot-ingest`
+
+Go to:
+
+- **Lambda → Functions → <code>beetroot-ingest</code>**
+- Scroll to **Layers**
+- Click **Add a layer**
+- Choose **Custom layers**
+- Select <code>beetroot-pillow-py314</code> (latest version)
+- Click **Add**
+
+The function now shows the layer in its Layers section.
+
+  </Step>
+
+  </Steps>
+
+## Quick Test
+
+Add these two lines temporarily near the top of your Lambda code:
+
+```python
+from PIL import Image
+print("PIL OK", Image.__version__)
+```
+
+Go to **Test** Tab --> Click on **Test** button --> Check the latest **CloudWatch logs**
+
+Expected: A log line such as <code>PIL OK 12.x.x</code>
+
+## Common issues
+
+<Tabs items={["No module named PIL", "Wrong zip structure", "Runtime mismatch", "docker: error during connect"]} groupId="layer-issues" persist>
+
+<Tab value="No module named PIL">
+If you see <code>No module named 'PIL'</code>:
+- the layer is not attached, or
+- the zip does not contain <code>python/</code> at the root.
+
+</Tab>
+
+<Tab value="Wrong zip structure">
+  The most common mistake is zipping the folder itself instead of its contents.
+  Your zip must start with: <code>python/</code>
+</Tab>
+
+<Tab value="Runtime mismatch">
+  If your Lambda runtime is <code>python3.11</code> but the layer is published
+  for <code>python3.14</code>, you may hit compatibility issues. Publish the
+  layer using the same runtime as your function.
+</Tab>
+
+  <Tab value="docker: error during connect">
+    If you see an error like:
+    <code>docker: error during connect ... dockerDesktopLinuxEngine ... The system cannot find the file specified</code>,
+    it usually means Docker Desktop isn’t running or Linux containers/WSL2 engine isn’t started.
+    Start Docker Desktop, ensure Linux containers mode is enabled, then retry the command.
+  </Tab>
+</Tabs>

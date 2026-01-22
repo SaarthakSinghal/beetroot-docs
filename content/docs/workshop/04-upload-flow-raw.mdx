@@ -1,0 +1,80 @@
+---
+title: "Upload Raw Photos"
+description: "Upload test photos into S3 so we can trigger the ingestion pipeline in later steps."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+## Goal
+
+Upload a few test images into the raw bucket under <code>photos-raw/</code>.
+These uploads will later be used to trigger the ingestion Lambda.
+
+## Minimum prerequisites
+
+Make sure:
+- Your AWS CLI works (<code>aws sts get-caller-identity</code>)
+- Your raw bucket exists: <code>beetroot-raw</code>
+- Your prefix exists (or will be created automatically): <code>photos-raw/</code>
+- You are using the same region everywhere: <code>us-east-1</code>
+
+<Callout type="tip" title="Choose the right photos">
+Use 2-3 photos that contain <b>multiple faces</b> (group photos work best).
+This makes the face grouping output much easier to understand later.
+</Callout>
+
+## Step 1: Create a local test folder
+
+1. Create a folder on your computer named:
+   - <code>beetroot-test-photos/</code>
+
+2. Add 2-3 images inside it:
+   - JPG or PNG works best
+   - Prefer images where faces are clear and not too small
+
+Example:
+- <code>beetroot-test-photos/group1.jpg</code>
+- <code>beetroot-test-photos/group2.jpg</code>
+
+## Step 2: Upload photos using AWS CLI
+
+<Callout type="tip" title="Why CLI?">
+You can upload the photos from the Console if you want, but CLI is faster for repeated testing, and later steps in this project will also rely on CLI commands so it's worth learning now.
+</Callout>
+
+From the folder's parent directory, run:
+
+```bash
+aws s3 cp ./v2-test-photos s3://beetroot-raw/photos-raw/ --recursive --region us-east-1
+````
+
+What this does:
+
+* uploads every file in <code>v2-test-photos/</code>
+* places them under <code>photos-raw/</code> in the raw bucket
+
+<Callout type="info" title="What does `--recursive` do?">
+  `--recursive` tells the AWS CLI to upload <b>everything inside the folder</b>, including any subfolders.
+
+  Without `--recursive`, <code>aws s3 cp</code> would only upload a single file (not the whole directory).
+</Callout>
+
+## Step 3: Verify the upload
+
+Run:
+
+```bash
+aws s3 ls s3://beetroot-raw/photos-raw/ --region us-east-1
+```
+
+You should see your uploaded image files listed.
+
+<Callout type="warning" title="If you see an error">
+Common causes:
+<ul>
+  <li>Wrong bucket name</li>
+  <li>Wrong region (<code>us-east-1</code> vs another region)</li>
+  <li>AWS CLI not configured correctly</li>
+</ul>
+Fix those before moving on, or the next steps will not work.
+</Callout>

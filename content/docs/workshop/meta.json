@@ -1,0 +1,21 @@
+{
+  "root": true,
+  "title": "Workshop",
+  "pages": [
+    "01-overview",
+    "02-aws-resources",
+    "03-architecture",
+    "03-iam",
+    "04-upload-flow-raw",
+    "05-s3-trigger",
+    "06-ingest-lambda",
+    "07-detect-faces",
+    "08-lambda-layer",
+    "09-crop-thumbnail",
+    "10-search-faces",
+    "11-index-faces",
+    "12-occurrences",
+    "13-api-lambda"
+  ],
+  "description": "Step-by-step build path"
+}

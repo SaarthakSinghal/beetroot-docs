@@ -1,0 +1,338 @@
+---
+title: People Clusters in DynamoDB
+description: Write Persons + Occurrences records to list people and fetch all photos where a person appears.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+After this phase, your backend will be able to power two UI screens:
+
+- **People grid** → list people with a thumbnail + `photoCount`
+- **Person detail** → click a person → fetch all photos where they appear
+
+We achieve this by writing two kinds of records:
+
+- **`Persons` table**: one item per `personId`
+- **`Occurrences` table**: one item per `(personId, photoId)` pair
+
+<Callout type="info" title="What is a personId in this workshop?">
+  We use Rekognition’s `FaceId` as `personId`. That means: when Rekognition says
+  “this is the same face,” you get the same `personId`.
+</Callout>
+
+## What changes in this phase
+
+Until now, we were processing photos and generating thumbs.
+Now we also **save the relationships** so data is queryable later.
+
+<Tabs items={["Before", "After"]} groupId="phase12-mental-model" persist>
+  <Tab value="Before">
+    You could:
+    <ul>
+      <li>Detect faces</li>
+      <li>Crop and upload thumbnails</li>
+      <li>Search/Index faces (get `personId`)</li>
+    </ul>
+
+    But DynamoDB didn’t store:
+    <ul>
+      <li>“Which photos belong to this person?”</li>
+      <li>“How many photos does this person appear in?”</li>
+    </ul>
+
+  </Tab>
+
+  <Tab value="After">
+    For every detected face you now also write:
+    <ul>
+      <li>
+        <b>Persons</b> → increment `photoCount` + set a cover thumbnail (`repThumbKey`)
+      </li>
+      <li>
+        <b>Occurrences</b> → store one row linking `personId` to every `photoId` it appears
+      </li>
+    </ul>
+  </Tab>
+</Tabs>
+
+## Environment variables
+
+Your Lambda now reads two more table names.
+
+- `PERSONS_TABLE` = `Persons`
+- `OCCURRENCES_TABLE` = `Occurrences`
+
+## Step 1: Add table handles
+
+### What this adds
+
+You create DynamoDB “table objects” so you can write items easily.
+
+```python
+PERSONS_TABLE_NAME = os.environ.get("PERSONS_TABLE", "Persons")
+OCCURRENCES_TABLE_NAME = os.environ.get("OCCURRENCES_TABLE", "Occurrences")
+
+persons_table = ddb.Table(PERSONS_TABLE_NAME)
+occ_table = ddb.Table(OCCURRENCES_TABLE_NAME)
+
+```
+
+## Step 3: Store `boundingBox` safely
+
+DynamoDB prefers numbers as `Decimal` (not Python floats).
+So we convert the bounding box into a “DynamoDB friendly” map.
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase12-decimal" persist>
+
+  <Tab value="Code">
+
+```python
+from decimal import Decimal
+
+def as_decimal_bbox(bbox: dict) -> dict:
+    return {
+        "Left": Decimal(str(bbox.get("Left", 0.0))),
+        "Top": Decimal(str(bbox.get("Top", 0.0))),
+        "Width": Decimal(str(bbox.get("Width", 0.0))),
+        "Height": Decimal(str(bbox.get("Height", 0.0))),
+    }
+```
+
+  </Tab>
+
+  <Tab value="Input">
+    Example Rekognition bbox:
+    <ul>
+      <li>`{"Left": 0.12, "Top": 0.08, "Width": 0.30, "Height": 0.40}`</li>
+    </ul>
+  </Tab>
+
+  <Tab value="Output">
+    Same values, but stored as `Decimal` so DynamoDB saves them reliably.
+  </Tab>
+</Tabs>
+
+<Callout type="tip" title="Why store boundingBox at all?">
+  Later, a UI can draw a rectangle over the original photo, or you can re-crop
+  using the same bbox.
+</Callout>
+
+## Step 4: Update `Persons` table
+
+Create a new person if not found, else increment `photoCount`
+
+### What we want in `Persons`
+
+- `personId` (PK)
+- `createdAt` (set once)
+- `repThumbKey` (set once — the “cover photo”)
+- `photoCount` (increment each time we see this person in a new photo)
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase12-upsert-person" persist> <Tab value="Code">
+
+```python
+def upsert_person(person_id: str, rep_thumb_key: str, created_at: str):
+    persons_table.update_item(
+        Key={"personId": person_id},
+        UpdateExpression=(
+            "SET createdAt = if_not_exists(createdAt, :ca), "
+            "repThumbKey = if_not_exists(repThumbKey, :rt) "
+            "ADD photoCount :inc"
+        ),
+        ExpressionAttributeValues={
+            ":ca": created_at,
+            ":rt": rep_thumb_key,
+            ":inc": Decimal(1),
+        },
+    )
+```
+
+  </Tab>
+
+<Tab value="Input">
+  Example:
+  <ul>
+    <li>`person_id` = `0c7d...`</li>
+    <li>`rep_thumb_key` = `faces-thumbs/0c7d.../ab12_face_1.jpg`</li>
+    <li>`created_at` = `2026-01-21T...`</li>
+  </ul>
+</Tab>
+
+  <Tab value="Output">
+    In `Persons` table:
+    <ul>
+      <li>If the person is new → item is created</li>
+      <li>`createdAt` is set once</li>
+      <li>`repThumbKey` is set once</li>
+      <li>`photoCount` increases by 1</li>
+    </ul>
+  </Tab>
+</Tabs>
+
+<Callout type="info" title="Why use if_not_exists?">
+  If the person appears again later, we do not want to overwrite their original{" "}
+  `createdAt` or change the “cover thumbnail”.
+</Callout>
+
+## Step 5: Write `Occurrences` table (person ↔ photo link)
+
+### What we want in `Occurrences`
+
+One row per person per photo:
+
+- `personId` (PK)
+- `photoId` (SK)
+- `photoBucket`, `photoKey`
+- `thumbKey`
+- `boundingBox`
+- `confidence` (optional)
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase12-occurrence" persist> <Tab value="Code">
+
+```python
+def write_occurrence(
+    person_id: str,
+    photo_id: str,
+    photo_bucket: str,
+    photo_key: str,
+    thumb_key: str,
+    bbox: dict,
+    confidence: float | None,
+):
+    item = {
+        "personId": person_id,
+        "photoId": photo_id,
+        "photoBucket": photo_bucket,
+        "photoKey": photo_key,
+        "thumbKey": thumb_key,
+        "boundingBox": as_decimal_bbox(bbox),
+    }
+    if confidence is not None:
+        item["confidence"] = Decimal(str(confidence))
+
+    occ_table.put_item(Item=item)
+```
+
+  </Tab>
+
+<Tab value="Input">
+  Example values:
+  <ul>
+    <li>`personId` = `0c7d...`</li>
+    <li>`photoId` = `fe40...`</li>
+    <li>`photoKey` = `photos-raw/st5.jpg`</li>
+    <li>`thumbKey` = `faces-thumbs/0c7d.../fe40..._face_2.jpg`</li>
+  </ul>
+</Tab>
+
+  <Tab value="Output">
+    In `Occurrences` table:
+    <ul>
+      <li>Query by `personId` → returns all photos where the person that occurred</li>
+      <li>Each row links the person to one photo + one thumbnail</li>
+    </ul>
+  </Tab>
+</Tabs>
+
+<Callout type="tip" title="Why make Occurrences a separate table?">
+  Because “Photos for a person” becomes a clean DynamoDB query: `PK = personId`
+  → returns all related `photoId`'s fast.
+</Callout>
+
+## Step 6: Call these functions
+
+1. Add all the functions definitions before `lambda_handler`
+2. Once you have `person_id` and `thumb_key` for a face, you add these two writes:
+
+3. update/create the person
+4. write the occurrence row
+
+at the end of the face loop.
+
+```python
+    thumb_keys.append(thumb_key)
+
+    # increment photoCount (for "most frequent" People grid)
+    # set repThumbKey once
+    upsert_person(
+        person_id=person_id,
+        rep_thumb_key=thumb_key,
+        created_at=now_iso,
+    )
+
+    # record that this person appears in this photo
+    write_occurrence(
+        person_id=person_id,
+        photo_id=photo_id,
+        photo_bucket=bucket,
+        photo_key=key,
+        thumb_key=thumb_key,
+        bbox=bbox,
+        confidence=confidence,
+    )
+
+print(f"Wrote Persons/Occurrences for photoId={photo_id}")
+```
+
+## Checkpoint: what you should verify
+
+<Steps>
+  <Step>
+    ### Persons table
+    Upload 2 photos with the same 3 people.
+
+```
+In <b>DynamoDB → Persons</b>:
+<ul>
+  <li>You should still see <b>3</b> items (not 6)</li>
+  <li>`photoCount` should increase (e.g., 1 → 2)</li>
+  <li>`repThumbKey` should be present</li>
+</ul>
+```
+
+  </Step>
+
+  <Step>
+    ### Occurrences table
+    Pick one `personId` and query by it.
+
+```
+In <b>DynamoDB → Occurrences</b>:
+<ul>
+  <li>Partition key = that `personId`</li>
+  <li>You should see 2 rows with different `photoId`</li>
+</ul>
+```
+
+  </Step>
+</Steps>
+
+## Common questions
+
+<Tabs items={["Why overwrite Occurrences?", "Why increment photoCount?", "Why store repThumbKey?"]} groupId="phase12-qs" persist>
+
+<Tab value="Why overwrite Occurrences?">
+  We use `put_item` for Occurrences. If the same person-photo pair is processed
+  again, overwriting is okay in this workshop because it keeps the latest stored
+  metadata.
+</Tab>
+
+<Tab value="Why increment photoCount?">
+  The People grid needs a “most frequent” ordering. Incrementing `photoCount`
+  gives you that number without scanning the entire Occurrences table.
+</Tab>
+
+  <Tab value="Why store repThumbKey?">
+    The UI needs one thumbnail to represent the person.
+    We pick the first one we ever stored and keep it stable using `if_not_exists`.
+  </Tab>
+</Tabs>
+
+## Suggestions (optional)
+
+- If you later notice `photoCount` is increasing too fast, it usually means the same photo is being reprocessed under a different key (or idempotency isn’t working).
+- If you want “one occurrence per face” (instead of per person-photo), you can add a third key like `faceIndex` later—but for beginners, person-photo is simpler.

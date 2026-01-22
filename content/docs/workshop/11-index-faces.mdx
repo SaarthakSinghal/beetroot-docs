@@ -1,0 +1,522 @@
+---
+title: "Search or Index Faces"
+description: "Search the collection for each face; if no match is found, index it and save thumbnails grouped by personId."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+For every detected face, the ingestion Lambda should:
+
+1. Crop a face thumbnail (we already do this)
+2. Try to match it using `SearchFacesByImage`
+3. If matched, reuse that `FaceId` as `personId`
+4. If not matched, add it to rekognition collection using `IndexFaces`
+5. Upload the thumbnail under:
+
+{/* `faces-thumbs/<personId>/<photoId>_face_<n>.jpg` */}
+
+<Callout type="info" title="What is personId in this project?">
+  In <b>beetroot</b>, we treat Rekognition’s `FaceId` as our `personId`. That
+  means “a person cluster” is represented by one Rekognition face entry in the
+  collection.
+</Callout>
+
+## Setup
+
+### Environment variables
+
+- `REKOGNITION_COLLECTION_ID` = `beetroot-faces`
+- `FACE_MATCH_THRESHOLD` = `95` (optional)
+
+## Match or Index Code
+
+### What this update does
+
+Compared to the previous phase (crop + upload), we add two abilities inside the face loop:
+
+- <b>Search</b>: Try to find an existing person using `SearchFacesByImage`
+- <b>Index</b>: If no match is found, add the face to the collection using
+  `IndexFaces`
+
+This makes your Rekognition collection “learn” new faces over time.
+
+## Part 1: Search for an existing person (Done)
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase11-search" persist> <Tab value="Code">
+
+```python
+search_resp = rek.search_faces_by_image(
+    CollectionId=collection_id,
+    Image={"Bytes": face_bytes},
+    MaxFaces=1,
+    FaceMatchThreshold=threshold,
+)
+
+matches = search_resp.get("FaceMatches", [])
+```
+
+  </Tab>
+
+  <Tab value="Input">
+
+- `Bytes`: the cropped face image (in memory)
+- `MaxFaces=1`: return only the best match
+- `FaceMatchThreshold=95`: stricter matching
+
+</Tab>
+
+  <Tab value="Output">
+  - If matched: `FaceMatches` has 1 item
+  - If not matched: `FaceMatches` is an empty list
+
+</Tab>
+</Tabs>
+
+## Part 2: Match vs NoMatch
+
+### 2.1 If match exists
+
+```python
+if matches:
+    top = matches[0]
+    person_id = top["Face"]["FaceId"]
+    similarity = top.get("Similarity")
+    print(f"Match: idx={idx} personId={person_id} similarity={similarity}")
+```
+
+### 2.2 If no match, index the face
+
+If there is no match, we add this new face to the collection.
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase11-index" persist> <Tab value="Code">
+
+```python
+else:
+    # 2) No match -> Index face into the collection
+    print(f"NoMatch: idx={idx} threshold={FACE_MATCH_THRESHOLD} -> indexing")
+    index_resp = rek.index_faces(
+        CollectionId=collection_id,
+        Image={"Bytes": face_bytes},
+        ExternalImageId=f"{photo_id}_face_{idx}",
+        MaxFaces=1,
+        DetectionAttributes=["DEFAULT"],
+    )
+```
+
+  </Tab>
+
+<Tab value="Input">
+
+- `Bytes`: same cropped face bytes
+- `ExternalImageId`: helpful label for debugging
+- `MaxFaces=1`: we are indexing one cropped face
+
+</Tab>
+
+  <Tab value="Output">
+
+    - `FaceRecords` contains the newly indexed face
+    - It remembers the face in form of `FaceId`
+    - We extract the new `FaceId` and treat it as `personId`
+
+  </Tab>
+
+</Tabs>
+
+Then read the result:
+
+```python
+records2 = index_resp.get("FaceRecords", [])
+if not records2:
+    print("IndexFaces failed; UnindexedFaces=", index_resp.get("UnindexedFaces", []))
+    continue
+
+person_id = records2[0]["Face"]["FaceId"]
+print(f"Indexed: idx={idx} new personId={person_id}")
+```
+
+<Callout type="warning" title="Why indexing is necessary">
+  If you never call `IndexFaces`, the collection stays empty, so searches will
+  always return `NoMatch`.
+</Callout>
+
+## Part 3: Upload thumbnails grouped by `personId`
+
+Once we have `person_id` (from match or index), we upload the face thumbnail under that folder:
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase11-thumb-upload" persist>
+  <Tab value="Code">
+```python
+    thumb_key = f"{THUMBS_PREFIX}{photo_id}/face_{idx}.jpg" # [!code --]
+    thumb_key = f"{THUMBS_PREFIX}{person_id}/{photo_id}_face_{idx}.jpg" # [!code ++]
+    s3.put_object(
+        Bucket=THUMBS_BUCKET,
+        Key=thumb_key,
+        Body=face_bytes,
+        ContentType="image/jpeg",
+    )
+
+print(f"Thumbnails: uploaded {len(thumb_keys)} to s3://{THUMBS_BUCKET}/{THUMBS_PREFIX}{photo_id}/") # [!code --]
+print(f"Thumbnails: uploaded {len(thumb_keys)} for photoId={photo_id}") # [!code ++]
+
+````
+
+  </Tab>
+
+<Tab value="Input">
+Example values at runtime:
+
+- `THUMBS_BUCKET = "beetroot-thumbs"`
+- `THUMBS_PREFIX = "faces-thumbs/"`
+- `person_id = "9ff9"`
+- `photo_id = "feef"`
+- `idx = 2`
+- `face_bytes` = in-memory JPEG bytes of the cropped face
+
+</Tab>
+
+<Tab value="Output">
+
+What happens:
+
+- A new object is created under `beetroot-thumbs` S3 bucket at: `faces-thumbs/9ff9/feef_face_2.jpg`
+
+Where to confirm:
+
+- S3 → `beetroot-thumbs`
+- Open prefix: `faces-thumbs/<personId>/`
+- You should see one file per detected face (`..._face_1.jpg`, `..._face_2.jpg`, etc.)
+
+</Tab>
+
+  </Tabs>
+
+  <Callout type="info" title="Why we changed the thumbnail path">
+  We switched from grouping thumbnails by `photoId` to grouping by `personId`.
+
+  <ul>
+    <li>
+      <b>Old path:</b>
+      `{faces-thumbs/<photoId>/face_1.jpg}`
+      <br />
+      Good for debugging one upload, but it scatters the same person’s faces across many folders.
+    </li>
+
+    <li>
+      <b>New path:</b>
+      `{faces-thumbs/<personId>/<photoId>_face_1.jpg}`
+      <br />
+      Better for the “People” view later: one folder contains all thumbnails for the same person, across all photos.
+    </li>
+
+  </ul>
+  </Callout>
+
+<Callout type="info" title="Why this S3 path?">
+Storing thumbnails as `<personId>/<photoId>_face_<n>.jpg`
+  keeps all faces of the same person together. That makes the later “People
+  grid” API and UI much easier to build and debug.
+</Callout>
+
+## Test
+
+<Steps>
+  <Step>
+    ### First upload (new people)
+
+```txt
+Upload a group photo where faces are new. In logs you should see:
+
+- `NoMatch ... -> indexing`
+- `Indexed ... new personId=...`
+````
+
+![CloudWatch Ingest indexing faces](/images/architecture/cloudwatch-ingest-index-1.png)
+![CloudWatch Ingest indexing faces](/images/architecture/cloudwatch-ingest-index-12.png)
+
+  </Step>
+
+  <Step>
+    ### Second upload (repeated faces)
+
+```txt
+Upload another photo containing at least one of the same people.
+In logs you should start seeing:
+
+- `Match ... similarity=...`
+
+```
+
+![CloudWatch Ingest searching faces](/images/architecture/cloudwatch-ingest-index-2.png)
+
+  </Step>
+</Steps>
+
+## Updated Lambda Code
+
+Paste this and deploy:
+
+```python title="beetroot-ingest/lambda_function.py" lineNumbers
+import json
+import os
+import hashlib
+from datetime import datetime, timezone
+from urllib.parse import unquote_plus
+from io import BytesIO
+
+import boto3
+from botocore.exceptions import ClientError
+from PIL import Image
+
+ddb = boto3.resource("dynamodb")
+s3 = boto3.client("s3")
+rek = boto3.client("rekognition")
+
+PHOTOS_TABLE_NAME = os.environ.get("PHOTOS_TABLE", "Photos")
+RAW_PREFIX = os.environ.get("RAW_PREFIX", "photos-raw/")
+
+THUMBS_BUCKET = os.environ["THUMBS_BUCKET"]
+THUMBS_PREFIX = os.environ.get("THUMBS_PREFIX", "faces-thumbs/")
+
+collection_id = os.environ["REKOGNITION_COLLECTION_ID"]
+threshold = float(os.environ.get("FACE_MATCH_THRESHOLD", "95"))
+
+photos_table = ddb.Table(PHOTOS_TABLE_NAME)
+
+def make_photo_id(bucket: str, key: str) -> str:
+    raw = f"{bucket}/{key}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:20]
+
+def clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+def bbox_to_pixels(bbox: dict, img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    left = clamp01(float(bbox.get("Left", 0.0)))
+    top = clamp01(float(bbox.get("Top", 0.0)))
+    width = float(bbox.get("Width", 0.0))
+    height = float(bbox.get("Height", 0.0))
+
+    right = clamp01(left + width)
+    bottom = clamp01(top + height)
+
+    x1 = int(left * img_w)
+    y1 = int(top * img_h)
+    x2 = int(right * img_w)
+    y2 = int(bottom * img_h)
+
+    x2 = max(x2, x1 + 1)
+    y2 = max(y2, y1 + 1)
+    return x1, y1, x2, y2
+
+def lambda_handler(event, context):
+    records = event.get("Records", [])
+    if not records:
+        print("No Records in event; exiting.")
+        return {"statusCode": 200, "body": "no records"}
+
+    for record in records:
+        s3_info = record.get("s3", {})
+        bucket = s3_info.get("bucket", {}).get("name")
+        key = s3_info.get("object", {}).get("key")
+
+        if not bucket or not key:
+            print("Skipping record: missing bucket/key")
+            continue
+
+        key = unquote_plus(key)
+
+        if not key.startswith(RAW_PREFIX):
+            print(f"Skipping key outside RAW_PREFIX ({RAW_PREFIX}): {key}")
+            continue
+
+        photo_id = make_photo_id(bucket, key)
+        uploaded_at = datetime.now(timezone.utc).isoformat()
+
+        item = {
+            "photoId": photo_id,
+            "s3Bucket": bucket,
+            "s3Key": key,
+            "uploadedAt": uploaded_at,
+        }
+
+        try:
+            photos_table.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(photoId)",
+            )
+            print(f"Photos: inserted photoId={photo_id} key={key}")
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "Unknown")
+            if code == "ConditionalCheckFailedException":
+                print(f"Photos: already exists; skipping photoId={photo_id} key={key}")
+                continue
+            print("DynamoDB put_item failed:", str(e))
+            raise
+
+        resp = rek.detect_faces(
+            Image={"S3Object": {"Bucket": bucket, "Name": key}},
+            Attributes=["DEFAULT"],
+        )
+
+        face_details = resp.get("FaceDetails", [])
+        face_count = len(face_details)
+        print(f"DetectFaces: photoId={photo_id} faces={face_count}")
+
+        photos_table.update_item(
+            Key={"photoId": photo_id},
+            UpdateExpression="SET faceCount = :c",
+            ExpressionAttributeValues={":c": face_count},
+        )
+
+        if face_count == 0:
+            print(f"No faces; done for photoId={photo_id}")
+            continue
+
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        img_bytes = obj["Body"].read()
+
+        im = Image.open(BytesIO(img_bytes)).convert("RGB")
+        img_w, img_h = im.size
+
+        print(f"Image: photoId={photo_id} size={img_w}x{img_h}")
+
+        thumb_keys = []
+
+        for idx, fd in enumerate(face_details, start=1):
+            bbox = fd.get("BoundingBox", {})
+            x1, y1, x2, y2 = bbox_to_pixels(bbox, img_w, img_h)
+
+            face_im = im.crop((x1, y1, x2, y2))
+
+            out = BytesIO()
+            face_im.save(out, format="JPEG", quality=90)
+            out.seek(0)
+
+            face_bytes = out.getvalue()
+
+            # 1) Search for match
+            search_resp = rek.search_faces_by_image(
+                CollectionId=collection_id,
+                Image={"Bytes": face_bytes},
+                MaxFaces=1,
+                FaceMatchThreshold=threshold,
+            )
+
+            # 2) Match or no match
+            matches = search_resp.get("FaceMatches", [])
+            if matches:
+                top = matches[0]
+                person_id = top["Face"]["FaceId"]  # personId == FaceId (your chosen rule)
+                similarity = top.get("Similarity")
+                print(f"Match: idx={idx} personId={person_id} similarity={similarity}")
+            else:
+                # 2) No match -> Index face into the collection
+                print(f"NoMatch: idx={idx} threshold={threshold} -> indexing")
+                index_resp = rek.index_faces(
+                    CollectionId=collection_id,
+                    Image={"Bytes": face_bytes},
+                    ExternalImageId=f"{photo_id}_face_{idx}",
+                    MaxFaces=1,
+                    DetectionAttributes=["DEFAULT"],
+                )
+
+                records2 = index_resp.get("FaceRecords", [])
+                if not records2:
+                    print("IndexFaces failed; UnindexedFaces=", index_resp.get("UnindexedFaces", []))
+                    continue
+
+                person_id = records2[0]["Face"]["FaceId"]
+                print(f"Indexed: idx={idx} new personId={person_id}")
+
+            thumb_key = f"{THUMBS_PREFIX}{person_id}/{photo_id}_face_{idx}.jpg"
+            s3.put_object(
+                Bucket=THUMBS_BUCKET,
+                Key=thumb_key,
+                Body=face_bytes,
+                ContentType="image/jpeg",
+            )
+
+            thumb_keys.append(thumb_key)
+
+        print(f"Thumbnails: uploaded {len(thumb_keys)} for photoId={photo_id}")
+
+        photos_table.update_item(
+            Key={"photoId": photo_id},
+            UpdateExpression="SET faceThumbKeys = :k",
+            ExpressionAttributeValues={":k": thumb_keys},
+        )
+
+        print(f"Updated Photos table with thumb_keys: {thumb_keys}")
+
+    return {"statusCode": 200, "body": "ingest lambda with match and index ok"}
+```
+
+---
+
+## Common issues
+
+<Tabs items={["AccessDenied", "ResourceNotFound", "Always NoMatch", "Index failed"]} groupId="phase11-issues" persist>
+
+<Tab value="AccessDenied">
+  If you see `AccessDeniedException`, your role is missing:
+  `rekognition:SearchFacesByImage` and/or `rekognition:IndexFaces`.
+</Tab>
+
+<Tab value="ResourceNotFound">
+  If you see `ResourceNotFoundException`, your collection ID is wrong or you
+  created it in a different region.
+</Tab>
+
+<Tab value="Always NoMatch">
+  If you always see `NoMatch`, it usually means indexing is not happening (or
+  failing). Check for `Indexed:` logs.
+</Tab>
+
+  <Tab value="Index failed">
+    If logs show `UnindexedFaces`, Rekognition rejected the face (too small, blurry, extreme angle). Try a clearer, larger face.
+  </Tab>
+</Tabs>
+
+## Student questions
+
+<Tabs
+  items={[
+    "Why NoMatch?",
+    "Why Bytes input?",
+    "Will this cost money?",
+  ]}
+  groupId="phase11-student-qs"
+  persist
+>
+  <Tab value="Why NoMatch?">
+    `SearchFacesByImage` can only match faces that are already
+    <b> indexed</b> in the collection. On the first photo, your collection may be empty,
+    so `NoMatch` is normal until `IndexFaces` runs.
+  </Tab>
+
+<Tab value="Why threshold 95?">
+  <b>Q:</b> What does `FACE_MATCH_THRESHOLD=95` mean?
+  <b>A:</b> Higher threshold = stricter matching (fewer wrong matches, but more
+  “new people”). Lower threshold = more matches (but higher risk of mixing
+  different people).
+</Tab>
+
+<Tab value="Why Bytes input?">
+
+    We pass `Image={"Bytes": ...}` instead of S3 object because
+    we already have the cropped face in memory (BytesIO), so we can search/index
+    without uploading it first. This keeps the loop faster and simpler.
+
+</Tab>
+
+<Tab value="Will this cost money?">
+
+    **Yes**. Rekognition charges per API call, and collections store face metadata. For the workshop,
+    keep uploads small and delete collections/faces when done.
+
+</Tab>
+</Tabs>

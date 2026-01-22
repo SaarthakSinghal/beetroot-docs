@@ -1,0 +1,615 @@
+---
+title: "Crop Thumbnails"
+description: "Download the image, crop each detected face using bounding boxes, and upload thumbnails to S3."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+When a photo upload triggers `beetroot-ingest`, the Lambda should:
+
+1. Download the image from the raw bucket
+2. Convert Rekognition bounding boxes (ratios) into pixel coordinates
+3. Crop each detected face into a thumbnail
+4. Upload thumbnails to `s3://beetroot-thumbs/faces-thumbs/&lt;photoId&gt;/...`
+5. (Optional) store thumbnail keys back into the `Photos` item for easy debugging
+
+## Prerequisite
+
+Make sure your <b>Pillow layer</b> is attached and working (`from PIL import Image` works).
+
+## Setup
+
+### Environment Variables
+
+Add these environment variables in your Lambda:
+
+- `THUMBS_BUCKET` = `beetroot-thumbs`
+- `THUMBS_PREFIX` = `faces-thumbs/`
+
+### Increase Lambda Timeout
+
+1. Go to **Lambda → beetroot-ingest**
+2. **Configuration → General configuration → Edit**
+3. Set **Timeout**: `1 minute`
+4. Save
+
+## Crop Code
+
+### What this update does
+
+Compared to the previous phase (`DetectFaces`), the Lambda now:
+
+- adds an <b>S3 client</b> required to download and upload image bytes
+- uses <b>Pillow</b> to crop face thumbnails
+- converts `boundingBox` <b>ratios → pixels</b> safely (with clamping)
+- uploads thumbnails into a stable S3 path per photo
+
+### Part 1: New imports
+
+We add two new imports for image byte handling and cropping:
+
+- `BytesIO` → treat bytes like a file object
+- `PIL.Image` → open, crop, and save images
+
+```python
+from io import BytesIO
+from PIL import Image
+```
+
+<Callout type="tip" title="Why BytesIO?">
+  S3 gives us raw bytes. Pillow expects a “file-like” object, so we wrap bytes
+  in `BytesIO`.
+</Callout>
+
+### Part 2: New AWS Client + Env vars
+
+#### S3 Client
+
+We add an S3 client to download the original photo and upload thumbnails.
+
+```python
+# --- AWS clients/resources ---
+ddb = boto3.resource("dynamodb")
+rek = boto3.client("rekognition")
+s3 = boto3.client("s3") ## [!code ++]
+```
+
+#### Thumbnails Destination
+
+We read where thumbnails should be stored:
+
+```python
+THUMBS_BUCKET = os.environ["THUMBS_BUCKET"]
+THUMBS_PREFIX = os.environ.get("THUMBS_PREFIX", "faces-thumbs/")
+```
+
+<Callout type="warning" title="Why os.environ in case of THUMBS_BUCKET?">
+  Use `os.environ["THUMBS_BUCKET"]` so the function fails fast if the variable
+  is missing.
+</Callout>
+
+### Part 3: Bounding box helpers
+
+Rekognition returns bounding boxes as ratios (`0..1`) and sometimes edge cases can go slightly outside the range.
+
+#### Clamp values
+
+<Tabs items={["Code", "Example"]} groupId="phase9-clamp01" persist>
+
+  <Tab value="Code">
+
+```python
+def clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+```
+
+  </Tab>
+
+  <Tab value="Example">
+
+    **Edge cases**
+
+    - `clamp01(-0.20) → 0.0`
+    - `clamp01(1.30) → 1.0`
+
+    **Normal values**
+
+    - `clamp01(0.15) → 0.15`
+    - `clamp01(0.80) → 0.80`
+
+  </Tab>
+
+  </Tabs>
+
+#### Convert ratios → pixels
+
+This turns `Left/Top/Width/Height` into pixel coordinates that Pillow can crop.
+
+```python
+def bbox_to_pixels(bbox: dict, img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    left = clamp01(float(bbox.get("Left", 0.0)))
+    top = clamp01(float(bbox.get("Top", 0.0)))
+    width = float(bbox.get("Width", 0.0))
+    height = float(bbox.get("Height", 0.0))
+
+    right = clamp01(left + width)
+    bottom = clamp01(top + height)
+
+    x1 = int(left * img_w)
+    y1 = int(top * img_h)
+    x2 = int(right * img_w)
+    y2 = int(bottom * img_h)
+
+    x2 = max(x2, x1 + 1)
+    y2 = max(y2, y1 + 1)
+    return x1, y1, x2, y2
+```
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase9-bbox" persist> <Tab value="Code">
+
+```python
+x1 = int(left * img_w)
+y1 = int(top * img_h)
+x2 = int(right * img_w)
+y2 = int(bottom * img_h)
+```
+
+  </Tab>
+
+  <Tab value="Input">
+
+    - `img_w = 4000`, `img_h = 3000`
+    - `Left = 0.25`, `Top = 0.10`
+    - `Width = 0.20`, `Height = 0.25`
+
+  </Tab>
+
+  <Tab value="Output">
+
+- `x1 = 4000 * 0.25 = 1000`
+- `y1 = 3000 * 0.10 = 300`
+- `x2 = x1 + 4000 * 0.20 = 1800`
+- `y2 = y1 + 3000 * 0.25 = 1050`
+
+These are the pixel crop coordinates Pillow needs.
+
+  </Tab>
+
+</Tabs>
+
+<Callout type="info" title="What’s the clamp for?">
+  Clamping prevents invalid crop coordinates when bounding boxes are near image
+  edges.
+</Callout>
+
+### Part 4: Download the image
+
+After `DetectFaces` returns `face_details`, we fetch the same image from S3 and load it into Pillow to crop faces.
+
+```python
+obj = s3.get_object(Bucket=bucket, Key=key)
+img_bytes = obj["Body"].read()
+
+im = Image.open(BytesIO(img_bytes)).convert("RGB")
+img_w, img_h = im.size
+```
+
+**1) Download the S3 object**
+
+```python
+obj = s3.get_object(Bucket=bucket, Key=key)
+```
+
+Fetches the object metadata + body stream from S3.
+
+**2) Read bytes from the streaming body**
+
+```python
+img_bytes = obj["Body"].read()
+```
+
+Extracts the `Body` (a streaming response) and reads it fully into raw bytes.
+
+<Callout type="info" title="Why we need it?">
+  Pillow can’t crop a streaming object directly, it needs bytes (or a file-like
+  wrapper).
+</Callout>
+
+**3) Open the image with Pillow**
+
+```python
+im = Image.open(BytesIO(img_bytes)).convert("RGB")
+```
+
+- Wraps `img_bytes` in `BytesIO` (so it looks like a file),
+- Opens it using Pillow,
+- Converts it to `RGB`.
+
+**4) Capture image dimensions**
+
+```python
+img_w, img_h = im.size
+```
+
+Reads the image width and height in pixels.
+
+### Part 5: Crop and upload thumbnails
+
+For every detected face, we:
+
+1. read its `BoundingBox`
+2. convert it from ratios → pixels
+3. crop the face region using Pillow
+4. save the crop to memory as a `JPEG`
+5. upload it to S3
+6. store the uploaded key in `thumb_keys`
+
+#### Step 1: Loop over each detected face
+
+```python
+thumb_keys = []
+for idx, fd in enumerate(face_details, start=1):
+```
+
+- `thumb_keys` to store each uploaded thumbnail path.
+- `face_details` is a list (one entry per face).
+- `idx` becomes `1, 2, 3...` so we can name thumbnails
+  like `face_1.jpg`, `face_2.jpg`, etc.
+
+#### Step 2: Convert the face bounding box to pixels
+
+```python
+bbox = fd.get("BoundingBox", {})
+x1, y1, x2, y2 = bbox_to_pixels(bbox, img_w, img_h)
+```
+
+- Rekognition gives bounding boxes as ratios (`0..1`).
+- `bbox_to_pixels` converts them into real pixel coordinates based on
+  the image size.
+- Output is a rectangle:
+  - `(x1, y1)` is top-left
+  - `(x2, y2)` is bottom-right
+
+#### Step 3: Crop the face from image
+
+```python
+face_im = im.crop((x1, y1, x2, y2))
+```
+
+- Pillow’s `crop` takes a rectangle and returns a new image containing only that region.
+
+This is the **face thumbnail**.
+
+#### Step 4: Save the thumbnail to memory as JPEG
+
+```python
+out = BytesIO()
+face_im.save(out, format="JPEG", quality=90)
+out.seek(0)
+```
+
+- `BytesIO()` creates an in-memory file.
+- We save the cropped face into it as a `JPEG`.
+- `out.seek(0)` rewinds the pointer to the start so S3 can read the
+  bytes correctly.
+
+<Callout type="tip" title="Common bug">
+  If you forget `out.seek(0)`, uploads can become empty or corrupted because the
+  pointer is at the end.
+</Callout>
+
+#### Step 5: Build the thumbnail S3 path (key)
+
+```python
+thumb_key = f"{THUMBS_PREFIX}{photo_id}/face_{idx}.jpg"
+```
+
+This creates keys like:
+
+- `faces-thumbs/a1f09c2b7e3d4a91b6c2/face_1.jpg`
+- `faces-thumbs/a1f09c2b7e3d4a91b6c2/face_2.jpg`
+
+<Callout type="info" title="Why this S3 path?">
+
+    Using `<photoId>/face_1.jpg` keeps thumbnails grouped per photo, which makes:
+
+    - browsing in S3 easy
+    - debugging easy (everything for a photo is in one folder)
+    - cleanup easy (delete one folder to remove all thumbs for a photo)
+
+</Callout>
+
+### Step 6: Upload to thumbs bucket
+
+```python
+s3.put_object(
+    Bucket=THUMBS_BUCKET,
+    Key=thumb_key,
+    Body=out.getvalue(),
+    ContentType="image/jpeg",
+)
+```
+
+- uploads the in-memory bytes to S3
+- sets `ContentType` so the file previews correctly in the console/browser
+
+### Step 7: Store the key we uploaded
+
+```python
+thumb_keys.append(thumb_key)
+```
+
+Now `thumb_keys` will contain every thumbnail path for this photo.
+
+## Full Crop Code
+
+```python
+thumb_keys = []
+
+for idx, fd in enumerate(face_details, start=1):
+    bbox = fd.get("BoundingBox", {})
+    x1, y1, x2, y2 = bbox_to_pixels(bbox, img_w, img_h)
+
+    face_im = im.crop((x1, y1, x2, y2))
+
+    out = BytesIO()
+    face_im.save(out, format="JPEG", quality=90)
+    out.seek(0)
+
+    thumb_key = f"{THUMBS_PREFIX}{photo_id}/face_{idx}.jpg"
+    s3.put_object(
+        Bucket=THUMBS_BUCKET,
+        Key=thumb_key,
+        Body=out.getvalue(),
+        ContentType="image/jpeg",
+    )
+
+    thumb_keys.append(thumb_key)
+
+print(f"Thumbnails: uploaded {len(thumb_keys)} to s3://{THUMBS_BUCKET}/{THUMBS_PREFIX}{photo_id}/")
+```
+
+## Updated Lambda Code
+
+Paste and deploy:
+
+```python title="beetroot-ingest/lambda_function.py" lineNumbers
+import json
+import os
+import hashlib
+from datetime import datetime, timezone
+from urllib.parse import unquote_plus
+from io import BytesIO
+
+import boto3
+from botocore.exceptions import ClientError
+from PIL import Image
+
+ddb = boto3.resource("dynamodb")
+s3 = boto3.client("s3")
+rek = boto3.client("rekognition")
+
+PHOTOS_TABLE_NAME = os.environ.get("PHOTOS_TABLE", "Photos")
+RAW_PREFIX = os.environ.get("RAW_PREFIX", "photos-raw/")
+
+THUMBS_BUCKET = os.environ["THUMBS_BUCKET"]
+THUMBS_PREFIX = os.environ.get("THUMBS_PREFIX", "faces-thumbs/")
+
+photos_table = ddb.Table(PHOTOS_TABLE_NAME)
+
+def make_photo_id(bucket: str, key: str) -> str:
+    raw = f"{bucket}/{key}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:20]
+
+def clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+def bbox_to_pixels(bbox: dict, img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    left = clamp01(float(bbox.get("Left", 0.0)))
+    top = clamp01(float(bbox.get("Top", 0.0)))
+    width = float(bbox.get("Width", 0.0))
+    height = float(bbox.get("Height", 0.0))
+
+    right = clamp01(left + width)
+    bottom = clamp01(top + height)
+
+    x1 = int(left * img_w)
+    y1 = int(top * img_h)
+    x2 = int(right * img_w)
+    y2 = int(bottom * img_h)
+
+    x2 = max(x2, x1 + 1)
+    y2 = max(y2, y1 + 1)
+    return x1, y1, x2, y2
+
+def lambda_handler(event, context):
+    records = event.get("Records", [])
+    if not records:
+        print("No Records in event; exiting.")
+        return {"statusCode": 200, "body": "no records"}
+
+    for record in records:
+        s3_info = record.get("s3", {})
+        bucket = s3_info.get("bucket", {}).get("name")
+        key = s3_info.get("object", {}).get("key")
+
+        if not bucket or not key:
+            print("Skipping record: missing bucket/key")
+            continue
+
+        key = unquote_plus(key)
+
+        if not key.startswith(RAW_PREFIX):
+            print(f"Skipping key outside RAW_PREFIX ({RAW_PREFIX}): {key}")
+            continue
+
+        photo_id = make_photo_id(bucket, key)
+        uploaded_at = datetime.now(timezone.utc).isoformat()
+
+        item = {
+            "photoId": photo_id,
+            "s3Bucket": bucket,
+            "s3Key": key,
+            "uploadedAt": uploaded_at,
+        }
+
+        try:
+            photos_table.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(photoId)",
+            )
+            print(f"Photos: inserted photoId={photo_id} key={key}")
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "Unknown")
+            if code == "ConditionalCheckFailedException":
+                print(f"Photos: already exists; skipping photoId={photo_id} key={key}")
+                continue
+            print("DynamoDB put_item failed:", str(e))
+            raise
+
+        resp = rek.detect_faces(
+            Image={"S3Object": {"Bucket": bucket, "Name": key}},
+            Attributes=["DEFAULT"],
+        )
+
+        face_details = resp.get("FaceDetails", [])
+        face_count = len(face_details)
+        print(f"DetectFaces: photoId={photo_id} faces={face_count}")
+
+        photos_table.update_item(
+            Key={"photoId": photo_id},
+            UpdateExpression="SET faceCount = :c",
+            ExpressionAttributeValues={":c": face_count},
+        )
+
+        if face_count == 0:
+            print(f"No faces; done for photoId={photo_id}")
+            continue
+
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        img_bytes = obj["Body"].read()
+
+        im = Image.open(BytesIO(img_bytes)).convert("RGB")
+        img_w, img_h = im.size
+
+        thumb_keys = []
+
+        for idx, fd in enumerate(face_details, start=1):
+            bbox = fd.get("BoundingBox", {})
+            x1, y1, x2, y2 = bbox_to_pixels(bbox, img_w, img_h)
+
+            face_im = im.crop((x1, y1, x2, y2))
+
+            out = BytesIO()
+            face_im.save(out, format="JPEG", quality=90)
+            out.seek(0)
+
+            thumb_key = f"{THUMBS_PREFIX}{photo_id}/face_{idx}.jpg"
+            s3.put_object(
+                Bucket=THUMBS_BUCKET,
+                Key=thumb_key,
+                Body=out.getvalue(),
+                ContentType="image/jpeg",
+            )
+
+            thumb_keys.append(thumb_key)
+
+        print(f"Thumbnails: uploaded {len(thumb_keys)} to s3://{THUMBS_BUCKET}/{THUMBS_PREFIX}{photo_id}/")
+
+    return {"statusCode": 200, "body": "ingest lambda with crop ok"}
+```
+
+## Test
+
+<Steps>
+  <Step>
+    ### Upload a group photo
+
+```bash
+aws s3 cp ./v2-test-photos/group4.jpg s3://beetroot-raw/photos-raw/ --region us-east-1
+```
+
+```
+In CloudWatch logs, confirm:
+- `DetectFaces: ... faces==N;`
+- `Thumbnails: uploaded N ...`
+```
+
+  </Step>
+
+  <Step>
+    ### Verify thumbnails in S3
+
+```
+Go to the thumbs bucket and confirm files exist under:
+
+- `faces-thumbs/<photoId>/face_1.jpg`
+- `faces-thumbs/<photoId>/face_2.jpg`
+- ...
+```
+
+![beetroot-thumbs S3 bucket prefix faces-thumbs](/images/architecture/s3-faces-thumbs.png)
+
+  </Step>
+
+</Steps>
+
+---
+
+## Common mistakes
+
+<Tabs items={["Timeout (no thumbnails)", "No module named PIL", "AccessDenied (S3)", "faces=0", "0-byte thumbs"]} groupId="phase9-mistakes" persist>
+  <Tab value="Timeout (no thumbnails)">
+    If logs stop after `DetectFaces...` and you see a report like:
+    `Duration: 3000.00 ms`, your Lambda is timing out before cropping/uploading.
+
+    Fix: Increase **Configuration → General configuration**:
+    - Timeout: `1 minute`
+
+  </Tab>
+
+  <Tab value="No module named PIL">
+  If you see `No module named 'PIL'`, your Pillow layer isn’t attached or the layer zip structure is wrong.
+
+  </Tab>
+
+<Tab value="AccessDenied (S3)">
+
+If you see `AccessDenied` for S3, your role is missing:
+
+    - raw bucket read: `s3:GetObject`
+    - thumbs bucket write: `s3:PutObject`
+
+</Tab>
+
+<Tab value="faces=0">
+  If logs show `faces=0`, try a photo with larger, front-facing faces and better
+  lighting.
+</Tab>
+
+  <Tab value="0-byte thumbs">
+    If thumbnails upload but look broken/empty, ensure:
+    - you call `out.seek(0)`
+    - you upload `out.getvalue()` (bytes)
+  </Tab>
+</Tabs>
+
+## Student questions
+
+<Tabs items={["Why convert RGB?", "Why clamp?"]} groupId="phase9-qs" persist>
+
+  <Tab value="Why convert RGB?">
+Some images may be PNG or have different modes. Converting to `RGB` ensures we can consistently save JPEG thumbnails.
+
+</Tab>
+
+<Tab value="Why clamp?">
+  Bounding boxes near edges can be slightly outside the image. Clamping prevents
+  invalid crop coordinates.
+</Tab>
+
+</Tabs>

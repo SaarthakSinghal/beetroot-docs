@@ -1,0 +1,353 @@
+---
+title: "API Lambda (Persons + Photos)"
+description: "Create a small HTTP Lambda that returns People grid + Person detail data for the Beetroot React app."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+By the end of this phase, you’ll have a **backend API Lambda** that can power two React screens:
+
+1. **People grid**
+   - `GET /persons` → returns `{ personId, photoCount, repThumbKey }`
+
+2. **Person detail**
+   - `GET /persons/{personId}/photos` → returns `{ photoId, photoBucket, photoKey, thumbKey }`
+
+<Callout type="info" title="Why do we need an API at all?">
+  Your React app should not query DynamoDB directly. A small API Lambda acts
+  like a safe “middle layer” that reads DynamoDB and returns only what the UI
+  needs.
+</Callout>
+
+## What we already have
+
+From earlier phases, your DynamoDB data is now ready:
+
+- **Persons**: `personId`, `photoCount`, `repThumbKey`
+- **Occurrences**: for a `personId`, gives `photoId` + `thumbKey`
+- **Photos**: for a `photoId`, gives original `s3Bucket` + `s3Key`
+
+## Step 1: Create the API Lambda
+
+<Steps>
+  <Step>
+    ### Create a new Lambda function
+
+    AWS Console → **Lambda → Create function**
+
+    - **Name:** <code>beetroot-api</code>
+    - **Runtime:** Python 3.12
+    - **Permissions:** Create a new role (or reuse temporarily)
+
+    <Callout type="tip" title="About the role">
+      It’s okay to reuse a role temporarily while learning. We’ll tighten permissions later once everything is working.
+    </Callout>
+
+  </Step>
+
+  <Step>
+    ### Add environment variables
+
+    Lambda → **Configuration → Environment variables** → Add:
+
+    - <code>PERSONS_TABLE</code> = <code>Persons</code>
+    - <code>OCCURRENCES_TABLE</code> = <code>Occurrences</code>
+    - <code>PHOTOS_TABLE</code> = <code>Photos</code>
+
+    <Callout type="info" title="Why env vars?">
+      Table names change from project to project. Environment variables keep your code reusable and clean.
+    </Callout>
+
+  </Step>
+</Steps>
+
+## Phase 13 Code
+
+### What this code does
+
+This Lambda behaves like a tiny HTTP router:
+
+- reads <code>method</code> + <code>path</code> from the incoming request
+- returns JSON + CORS headers
+- supports 2 routes:
+  - <code>GET /persons</code>
+  - <code>GET /persons/{personId}/photos</code>
+
+### Part 1: Imports + DynamoDB table handles
+
+This section connects to DynamoDB and prepares table objects.
+
+```python
+import json
+import os
+
+import boto3
+from boto3.dynamodb.conditions import Key
+
+ddb = boto3.resource("dynamodb")
+
+PERSONS_TABLE = ddb.Table(os.environ.get("PERSONS_TABLE", "Persons"))
+OCC_TABLE = ddb.Table(os.environ.get("OCCURRENCES_TABLE", "Occurrences"))
+PHOTOS_TABLE = ddb.Table(os.environ.get("PHOTOS_TABLE", "Photos"))
+```
+
+<Callout type="tip" title="Why Key from boto3.dynamodb.conditions?">
+  We use <code>Key("personId").eq(person_id)</code> to query the{" "}
+  <code>Occurrences</code> table efficiently by partition key.
+</Callout>
+
+### Part 2: A helper to return JSON (with CORS)
+
+Instead of repeating response formatting in every route, we create one helper:
+
+```python
+def _resp(status: int, body: dict):
+    return {
+        "statusCode": status,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        },
+        "body": json.dumps(body),
+    }
+```
+
+<Callout type="warning" title="About CORS = *">
+  This is convenient for development. Later, you should restrict this to your
+  real frontend domain.
+</Callout>
+
+### Part 3: Read method + path and handle OPTIONS
+
+API calls always include a method and path.
+
+Browsers may send an <code>OPTIONS</code> request (CORS preflight) before the real <code>GET</code>.
+
+```python
+def lambda_handler(event, context):
+    method = event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod")
+    path = event.get("rawPath") or event.get("path") or ""
+
+    if method == "OPTIONS":
+        return _resp(200, {"ok": True})
+```
+
+<Tabs items={["Input", "Output"]} groupId="phase13-options" persist> <Tab value="Input">
+Browser sends a preflight:
+
+```
+<code>
+  method = OPTIONS
+</code>
+<br />
+<code>
+  path = /persons
+</code>
+```
+
+  </Tab>
+
+  <Tab value="Output">
+    Lambda returns <code>200</code> so the browser allows the real GET request.
+  </Tab>
+</Tabs>
+
+### Part 4: Route 1 — `GET /persons` (People grid)
+
+This route returns the list of persons for your People grid.
+
+In this workshop version, we do:
+
+- <code>scan()</code> the table (simple for beginners)
+- sort results by <code>photoCount</code> in Python
+
+```python
+if method == "GET" and path == "/persons":
+    items = []
+    resp = PERSONS_TABLE.scan(Limit=200)
+    items.extend(resp.get("Items", []))
+    while "LastEvaluatedKey" in resp and len(items) < 200:
+        resp = PERSONS_TABLE.scan(ExclusiveStartKey=resp["LastEvaluatedKey"], Limit=200)
+        items.extend(resp.get("Items", []))
+
+    items.sort(key=lambda x: int(x.get("photoCount", 0)), reverse=True)
+
+    return _resp(200, {"persons": items[:100]})
+```
+
+<Callout type="info" title="Why scan here?">
+  Scan is not ideal for huge tables, but it’s the simplest way to get started.
+  Once you understand the flow, we can add a GSI for efficient sorting later.
+</Callout>
+
+### Part 5: Route 2 — `GET /persons/{personId}/photos` (Person detail)
+
+This route returns all photos for one person:
+
+1. Query <code>Occurrences</code> by <code>personId</code>
+2. For each result, fetch the original photo record from <code>Photos</code>
+3. Return combined objects for the UI
+
+```python
+if method == "GET" and path.startswith("/persons/") and path.endswith("/photos"):
+    parts = path.strip("/").split("/")
+    if len(parts) != 3:
+        return _resp(400, {"error": "bad path"})
+    person_id = parts[1]
+
+    occ = OCC_TABLE.query(
+        KeyConditionExpression=Key("personId").eq(person_id),
+        Limit=200
+    ).get("Items", [])
+
+    photos = []
+    for o in occ:
+        photo_id = o.get("photoId")
+        if not photo_id:
+            continue
+        p = PHOTOS_TABLE.get_item(Key={"photoId": photo_id}).get("Item")
+        if not p:
+            continue
+        photos.append({
+            "photoId": photo_id,
+            "photoBucket": p.get("s3Bucket"),
+            "photoKey": p.get("s3Key"),
+            "thumbKey": o.get("thumbKey"),
+        })
+
+    return _resp(200, {"personId": person_id, "photos": photos})
+```
+
+<Tabs items={["Input", "Output"]} groupId="phase13-person-photos" persist> <Tab value="Input">
+Example request:
+
+```
+<code>
+  GET /persons/0c7d4865.../photos
+</code>
+```
+
+  </Tab>
+
+  <Tab value="Output">
+    Example response shape:
+
+```
+<ul>
+  <li>
+    <code>
+      personId
+    </code>
+  </li>
+  <li>
+    <code>
+      photos: [{`{ photoId, photoBucket, photoKey, thumbKey }`}]
+    </code>
+  </li>
+</ul>
+```
+
+  </Tab>
+</Tabs>
+
+<Callout type="tip" title="Why not BatchGet for Photos?">
+  BatchGet would be faster, but this loop is easier to understand first. We can
+  optimize after the API works.
+</Callout>
+
+### Part 6: Default route (404)
+
+If the request doesn’t match any of the two routes:
+
+```python
+return _resp(404, {"error": "not found", "path": path})
+```
+
+## Full Code (copy-paste)
+
+```python title="beetroot-api/lambda_function.py" lineNumbers
+import json
+import os
+
+import boto3
+from boto3.dynamodb.conditions import Key
+
+ddb = boto3.resource("dynamodb")
+
+PERSONS_TABLE = ddb.Table(os.environ.get("PERSONS_TABLE", "Persons"))
+OCC_TABLE = ddb.Table(os.environ.get("OCCURRENCES_TABLE", "Occurrences"))
+PHOTOS_TABLE = ddb.Table(os.environ.get("PHOTOS_TABLE", "Photos"))
+
+
+def _resp(status: int, body: dict):
+    return {
+        "statusCode": status,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        },
+        "body": json.dumps(body),
+    }
+
+
+def lambda_handler(event, context):
+    method = event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod")
+    path = event.get("rawPath") or event.get("path") or ""
+
+    if method == "OPTIONS":
+        return _resp(200, {"ok": True})
+
+    if method == "GET" and path == "/persons":
+        items = []
+        resp = PERSONS_TABLE.scan(Limit=200)
+        items.extend(resp.get("Items", []))
+        while "LastEvaluatedKey" in resp and len(items) < 200:
+            resp = PERSONS_TABLE.scan(ExclusiveStartKey=resp["LastEvaluatedKey"], Limit=200)
+            items.extend(resp.get("Items", []))
+
+        items.sort(key=lambda x: int(x.get("photoCount", 0)), reverse=True)
+        return _resp(200, {"persons": items[:100]})
+
+    if method == "GET" and path.startswith("/persons/") and path.endswith("/photos"):
+        parts = path.strip("/").split("/")
+        if len(parts) != 3:
+            return _resp(400, {"error": "bad path"})
+        person_id = parts[1]
+
+        occ = OCC_TABLE.query(
+            KeyConditionExpression=Key("personId").eq(person_id),
+            Limit=200
+        ).get("Items", [])
+
+        photos = []
+        for o in occ:
+            photo_id = o.get("photoId")
+            if not photo_id:
+                continue
+            p = PHOTOS_TABLE.get_item(Key={"photoId": photo_id}).get("Item")
+            if not p:
+                continue
+            photos.append({
+                "photoId": photo_id,
+                "photoBucket": p.get("s3Bucket"),
+                "photoKey": p.get("s3Key"),
+                "thumbKey": o.get("thumbKey"),
+            })
+
+        return _resp(200, {"personId": person_id, "photos": photos})
+
+    return _resp(404, {"error": "not found", "path": path})
+```
+
+## Suggestions
+
+- Keep this Lambda simple and working first.
+- In the next doc, we will give it an HTTP “front door” so React can call it (Function URL or API Gateway).
