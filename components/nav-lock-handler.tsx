@@ -53,7 +53,7 @@ export function NavLockHandler({ maxUnlockedIndex }: NavLockHandlerProps) {
           link.setAttribute('data-nav-locked', 'true');
 
           // Intercept click to redirect to unlock page
-          const clickHandler = (e: MouseEvent) => {
+          const clickHandler = (e: Event) => {
             e.preventDefault();
             e.stopPropagation();
             router.push(`/unlock?next=${encodeURIComponent(href)}`);

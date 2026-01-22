@@ -75,7 +75,7 @@ export function SidebarLockIndicator({ maxUnlockedIndex }: SidebarLockIndicatorP
             link.setAttribute('aria-label', 'Locked chapter - password required');
 
             // Intercept click to redirect to unlock page
-            const clickHandler = (e: MouseEvent) => {
+            const clickHandler = (e: Event) => {
               e.preventDefault();
               e.stopPropagation();
               router.push(`/unlock?next=${encodeURIComponent(href)}`);
