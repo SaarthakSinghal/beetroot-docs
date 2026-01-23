@@ -1,6 +1,6 @@
 ---
 title: "API Lambda (Persons + Photos)"
-description: "Create a small HTTP Lambda that returns People grid + Person detail data for the Beetroot React app."
+description: "Create a small HTTP Lambda that returns People grid + Person detail data for the beetroot React app."
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -9,13 +9,19 @@ import { Steps, Step } from "fumadocs-ui/components/steps";
 
 ## Goal
 
-By the end of this phase, you’ll have a **backend API Lambda** that can power two React screens:
+By the end of this phase, you'll have a **backend API Lambda** that can power two React screens:
 
 1. **People grid**
-   - `GET /persons` → returns `{ personId, photoCount, repThumbKey }`
+
+```txt
+GET /persons → returns { personId, photoCount, repThumbKey }
+```
 
 2. **Person detail**
-   - `GET /persons/{personId}/photos` → returns `{ photoId, photoBucket, photoKey, thumbKey }`
+
+```txt
+GET /persons/{personId}/photos → returns { photoId, photoBucket, photoKey, thumbKey }
+```
 
 <Callout type="info" title="Why do we need an API at all?">
   Your React app should not query DynamoDB directly. A small API Lambda acts
@@ -31,7 +37,7 @@ From earlier phases, your DynamoDB data is now ready:
 - **Occurrences**: for a `personId`, gives `photoId` + `thumbKey`
 - **Photos**: for a `photoId`, gives original `s3Bucket` + `s3Key`
 
-## Step 1: Create the API Lambda
+## Create the API Lambda
 
 <Steps>
   <Step>
@@ -44,7 +50,7 @@ From earlier phases, your DynamoDB data is now ready:
     - **Permissions:** Create a new role (or reuse temporarily)
 
     <Callout type="tip" title="About the role">
-      It’s okay to reuse a role temporarily while learning. We’ll tighten permissions later once everything is working.
+      It's okay to reuse a role temporarily while learning. We'll tighten permissions later once everything is working.
     </Callout>
 
   </Step>
@@ -65,7 +71,7 @@ From earlier phases, your DynamoDB data is now ready:
   </Step>
 </Steps>
 
-## Phase 13 Code
+## API Lambda Code
 
 ### What this code does
 
@@ -74,16 +80,20 @@ This Lambda behaves like a tiny HTTP router:
 - reads <code>method</code> + <code>path</code> from the incoming request
 - returns JSON + CORS headers
 - supports 2 routes:
-  - <code>GET /persons</code>
-  - <code>GET /persons/{personId}/photos</code>
 
-### Part 1: Imports + DynamoDB table handles
+```
+GET /persons
+GET /persons/{personId}/photos
+```
+
+## Part 1: Imports + DynamoDB table handles
 
 This section connects to DynamoDB and prepares table objects.
 
 ```python
 import json
 import os
+from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -100,7 +110,30 @@ PHOTOS_TABLE = ddb.Table(os.environ.get("PHOTOS_TABLE", "Photos"))
   <code>Occurrences</code> table efficiently by partition key.
 </Callout>
 
-### Part 2: A helper to return JSON (with CORS)
+## Part 2: Make JSON safe for DynamoDB numbers (Decimal)
+
+DynamoDB numbers come back from boto3 as <code>Decimal</code>.
+Python's <code>json.dumps()</code> cannot serialize <code>Decimal</code> unless we convert it.
+
+Add this helper once, and reuse it everywhere.
+
+```python
+def _json_default(o):
+    if isinstance(o, Decimal):
+        # Whole numbers (like photoCount=2) should stay integers
+        if o % 1 == 0:
+            return int(o)
+        return float(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+```
+
+<Callout type="info" title="Why do we need this?">
+  Without this, you may see:{" "}
+  <code>TypeError: Object of type Decimal is not JSON serializable</code>. This
+  keeps your API responses valid JSON for React.
+</Callout>
+
+## Part 3: A helper to return JSON (with CORS)
 
 Instead of repeating response formatting in every route, we create one helper:
 
@@ -123,7 +156,7 @@ def _resp(status: int, body: dict):
   real frontend domain.
 </Callout>
 
-### Part 3: Read method + path and handle OPTIONS
+## Part 4: Read method + path and handle OPTIONS
 
 API calls always include a method and path.
 
@@ -141,15 +174,9 @@ def lambda_handler(event, context):
 <Tabs items={["Input", "Output"]} groupId="phase13-options" persist> <Tab value="Input">
 Browser sends a preflight:
 
-```
-<code>
-  method = OPTIONS
-</code>
+<code>method = OPTIONS</code>
 <br />
-<code>
-  path = /persons
-</code>
-```
+<code>path = /persons</code>
 
   </Tab>
 
@@ -158,13 +185,13 @@ Browser sends a preflight:
   </Tab>
 </Tabs>
 
-### Part 4: Route 1 — `GET /persons` (People grid)
+## Part 5: Route 1 — `GET /persons`
 
 This route returns the list of persons for your People grid.
 
 In this workshop version, we do:
 
-- <code>scan()</code> the table (simple for beginners)
+- <code>scan()</code> the table
 - sort results by <code>photoCount</code> in Python
 
 ```python
@@ -182,98 +209,245 @@ if method == "GET" and path == "/persons":
 ```
 
 <Callout type="info" title="Why scan here?">
-  Scan is not ideal for huge tables, but it’s the simplest way to get started.
+  Scan is not ideal for huge tables, but it's the simplest way to get started.
   Once you understand the flow, we can add a GSI for efficient sorting later.
 </Callout>
 
-### Part 5: Route 2 — `GET /persons/{personId}/photos` (Person detail)
+## Part 6: Route 2 — `GET /persons/{personId}/photos`
 
-This route returns all photos for one person:
+### What this route does
 
-1. Query <code>Occurrences</code> by <code>personId</code>
-2. For each result, fetch the original photo record from <code>Photos</code>
-3. Return combined objects for the UI
+When the UI opens a person's page, it needs:
+
+- **which photos** this person appears in
+- the **thumbnail** for each appearance
+- the **original photo location** (bucket + key) so the UI can load it later
+
+We build that response by combining data from **two tables**:
+
+1. **Occurrences** (fast query by `personId`)
+2. **Photos** (lookup by `photoId`)
+
+### 6.1: Validate the path and extract `personId`
+
+We only accept paths like:
+
+- `/persons/<personId>/photos`
 
 ```python
-if method == "GET" and path.startswith("/persons/") and path.endswith("/photos"):
-    parts = path.strip("/").split("/")
-    if len(parts) != 3:
-        return _resp(400, {"error": "bad path"})
-    person_id = parts[1]
-
-    occ = OCC_TABLE.query(
-        KeyConditionExpression=Key("personId").eq(person_id),
-        Limit=200
-    ).get("Items", [])
-
-    photos = []
-    for o in occ:
-        photo_id = o.get("photoId")
-        if not photo_id:
-            continue
-        p = PHOTOS_TABLE.get_item(Key={"photoId": photo_id}).get("Item")
-        if not p:
-            continue
-        photos.append({
-            "photoId": photo_id,
-            "photoBucket": p.get("s3Bucket"),
-            "photoKey": p.get("s3Key"),
-            "thumbKey": o.get("thumbKey"),
-        })
-
-    return _resp(200, {"personId": person_id, "photos": photos})
+parts = path.strip("/").split("/")
+if len(parts) != 3:
+    return _resp(400, {"error": "bad path"})
+person_id = parts[1]
 ```
 
-<Tabs items={["Input", "Output"]} groupId="phase13-person-photos" persist> <Tab value="Input">
-Example request:
+<Tabs items={["Code", "Input", "Output"]} groupId="phase13-parse-personid" persist>
+ <Tab value="Code">
+```python
+parts = path.strip("/").split("/")
+person_id = parts[1]
+ ```
+</Tab>
+
+  <Tab value="Input">
+    Example path:
 
 ```
-<code>
-  GET /persons/0c7d4865.../photos
-</code>
+/persons/0c7d4865.../photos
 ```
 
   </Tab>
 
   <Tab value="Output">
-    Example response shape:
+    Extracted value:
 
 ```
-<ul>
-  <li>
-    <code>
-      personId
-    </code>
-  </li>
-  <li>
-    <code>
-      photos: [{`{ photoId, photoBucket, photoKey, thumbKey }`}]
-    </code>
-  </li>
-</ul>
+person_id = "0c7d4865..."
 ```
 
   </Tab>
 </Tabs>
 
-<Callout type="tip" title="Why not BatchGet for Photos?">
-  BatchGet would be faster, but this loop is easier to understand first. We can
-  optimize after the API works.
+<Callout type="tip" title="Why do we parse the path manually?">
+  Right now, we don't have API Gateway routing yet. We're keeping the Lambda
+  logic simple and readable. Later, the HTTP layer can map this route
+  automatically.
 </Callout>
 
-### Part 6: Default route (404)
+### 6.2: Query `Occurrences` by `personId`
 
-If the request doesn’t match any of the two routes:
+The **Occurrences table** is designed exactly for this query:
+
+- Partition key: `personId`
+- Sort key: `photoId`
+
+So we can fetch all photos for a person using a single query.
+
+```python
+occ = OCC_TABLE.query(
+    KeyConditionExpression=Key("personId").eq(person_id),
+    Limit=200
+).get("Items", [])
+```
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase13-occ-query" persist>
+<Tab value="Code">
+```python
+occ = OCC_TABLE.query(
+    KeyConditionExpression=Key("personId").eq(person_id),
+    Limit=200
+).get("Items", [])
+```
+</Tab>
+
+<Tab value="Input">
+  <code>person_id = "0c7d4865..."</code>
+</Tab>
+
+  <Tab value="Output">
+```json
+occ = [
+  {"photoId": "fe40...", "thumbKey": "faces-thumbs/0c7d.../fe40_face_1.jpg", ...},
+  ...
+]
+```
+  </Tab>
+</Tabs>
+
+<Callout type="info" title="Why not scan Occurrences?">
+  A scan reads the full table. A query reads only the partition you want. That's
+  why we designed Occurrences with PK = personId.
+</Callout>
+
+### 6.3: Fetch the original photo info from `Photos`
+
+Occurrences tells us **photoId**, but the UI also needs where the photo lives:
+
+- `s3Bucket`
+- `s3Key`
+
+That info is stored in the **Photos table**, so we fetch it.
+
+```python
+photos = []
+
+for o in occ:
+    photo_id = o.get("photoId")
+    if not photo_id:
+        continue
+
+    p = PHOTOS_TABLE.get_item(Key={"photoId": photo_id}).get("Item")
+    if not p:
+        continue
+```
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase13-photos-getitem" persist> <Tab value="Code">
+```python
+p = PHOTOS_TABLE.get_item(
+    Key={"photoId": photo_id}
+).get("Item")
+```
+</Tab>
+
+<Tab value="Input">
+  <code>photo_id = "fe40..."</code>
+</Tab>
+
+  <Tab value="Output">
+```json
+p = {
+  "photoId": "fe40...",
+  "s3Bucket": "beetroot-raw",
+  "s3Key": "photos-raw/st5.jpg",
+  ...
+}
+```
+  </Tab>
+</Tabs>
+
+<Callout type="tip" title="Why do we need Photos table here?">
+  Occurrences is “person ↔ photo link”. Photos is the single source of truth for
+  the original S3 path.
+</Callout>
+
+### 6.4: Build the response objects for the UI
+
+Now we combine:
+
+- `thumbKey` from **Occurrences**
+- `s3Bucket` + `s3Key` from **Photos**
+- and return a clean list React can use
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase13-merge-output" persist>
+
+<Tab value="Code">
+```python
+photos.append({
+    "photoId": photo_id,
+    "photoBucket": p.get("s3Bucket"),
+    "photoKey": p.get("s3Key"),
+    "thumbKey": o.get("thumbKey"),
+})
+```
+</Tab>
+
+  <Tab value="Input">
+From `Occurrences`:
+
+```
+o.thumbKey = "faces-thumbs/0c7d.../fe40_face_1.jpg"
+```
+
+From `Photos`:
+
+```
+p.s3Bucket = "beetroot-raw"
+p.s3Key = "photos-raw/st5.jpg"
+```
+
+  </Tab>
+
+  <Tab value="Output">
+    One UI-ready entry:
+
+```json
+{
+  "photoId": "fe40...",
+  "photoBucket": "beetroot-raw",
+  "photoKey": "photos-raw/st5.jpg",
+  "thumbKey": "faces-thumbs/0c7d.../fe40_face_1.jpg"
+}
+```
+
+  </Tab>
+</Tabs>
+
+### 6.5: Return the final JSON response
+
+```python
+return _resp(200, {"personId": person_id, "photos": photos})
+```
+
+<Callout type="info" title="Student question: is this efficient?">
+  This is “good enough” for learning, but doing many <code>get_item</code> calls
+  is slower. Later, we can optimize this with <b>BatchGet</b> once the API works
+  end-to-end.
+</Callout>
+
+## Part 7: Default route (404)
+
+If the request doesn't match any of the two routes:
 
 ```python
 return _resp(404, {"error": "not found", "path": path})
 ```
 
-## Full Code (copy-paste)
+## Lambda Code
 
 ```python title="beetroot-api/lambda_function.py" lineNumbers
 import json
 import os
+from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -285,6 +459,14 @@ OCC_TABLE = ddb.Table(os.environ.get("OCCURRENCES_TABLE", "Occurrences"))
 PHOTOS_TABLE = ddb.Table(os.environ.get("PHOTOS_TABLE", "Photos"))
 
 
+def _json_default(o):
+    if isinstance(o, Decimal):
+        if o % 1 == 0:
+            return int(o)
+        return float(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+
 def _resp(status: int, body: dict):
     return {
         "statusCode": status,
@@ -294,7 +476,7 @@ def _resp(status: int, body: dict):
             "Access-Control-Allow-Methods": "GET,OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
         },
-        "body": json.dumps(body),
+        "body": json.dumps(body, default=_json_default),
     }
 
 
@@ -346,8 +528,3 @@ def lambda_handler(event, context):
 
     return _resp(404, {"error": "not found", "path": path})
 ```
-
-## Suggestions
-
-- Keep this Lambda simple and working first.
-- In the next doc, we will give it an HTTP “front door” so React can call it (Function URL or API Gateway).

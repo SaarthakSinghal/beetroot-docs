@@ -91,6 +91,12 @@ export const workshopDocs: WorkshopDoc[] = [
     index: 12,
     fullPath: "/docs/workshop/13-api-lambda",
   },
+  {
+    slug: "workshop/14-api-gateway",
+    title: "API Gateway",
+    index: 13,
+    fullPath: "/docs/workshop/14-api-gateway",
+  },
 ];
 
 // Build a map for quick lookup by slug

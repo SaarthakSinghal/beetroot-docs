@@ -6,12 +6,11 @@
  *
  * PASSWORD STRATEGY (in order of priority):
  * 1. Environment variable WORKSHOP_PW_<INDEX>
- * 2. Auto-generated from title: "{title}-chapter{index}"
+ * 2. Auto-generated 6-character password with alphanumeric + special char
  * 3. Fallback: "chapter{index}"
  *
- * For example:
- * - Title: "AWS Resources", Index: 1 → Password: "aws-resources-chapter1"
- * - Title: "IAM Setup", Index: 2 → Password: "iam-setup-chapter2"
+ * Auto-generated format: 6 characters (uppercase, lowercase, number, special char)
+ * Example: "K9$mP2", "B7#xL4", "T5@qR8"
  */
 
 // Simple password map using environment variables
@@ -19,7 +18,43 @@
 // simple string comparison is acceptable since they're short-lived session secrets
 
 /**
- * Generate password from title
+ * Generate a random 6-character password with alphanumeric and special characters
+ * Format: Exactly 6 characters including:
+ * - At least 1 uppercase letter
+ * - At least 1 lowercase letter
+ * - At least 1 number
+ * - At least 1 special character (!@#$%^&*)
+ *
+ * Examples: "K9$mP2", "B7#xL4", "T5@qR8", "A3&fZ9"
+ */
+function generateSixCharPassword(): string {
+  const uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // No I, O to avoid confusion
+  const lowercase = 'abcdefghjkmnpqrstuvwxyz'; // No i, l, o to avoid confusion
+  const numbers = '23456789'; // No 0, 1 to avoid confusion
+  const special = '!@#$%^&*';
+
+  // Start with one of each required type
+  let password = '';
+  password += uppercase[Math.floor(Math.random() * uppercase.length)];
+  password += lowercase[Math.floor(Math.random() * lowercase.length)];
+  password += numbers[Math.floor(Math.random() * numbers.length)];
+  password += special[Math.floor(Math.random() * special.length)];
+
+  // Fill remaining 2 characters with random mix
+  const allChars = uppercase + lowercase + numbers + special;
+  for (let i = 0; i < 2; i++) {
+    password += allChars[Math.floor(Math.random() * allChars.length)];
+  }
+
+  // Shuffle the password characters
+  return password
+    .split('')
+    .sort(() => Math.random() - 0.5)
+    .join('');
+}
+
+/**
+ * Generate password from title (DEPRECATED - kept for backward compatibility)
  * Formula: {lowercase-title-with-hyphens}-chapter{index}
  * Example: "AWS Resources" + index 1 → "aws-resources-chapter1"
  */
@@ -32,7 +67,7 @@ function generatePasswordFromTitle(title: string, index: number): string {
   return `${normalizedTitle}-chapter${index}`;
 }
 
-function getPasswordByIndex(index: number): string | null {
+export function getPasswordByIndex(index: number): string | null {
   // Try WORKSHOP_PW_<INDEX> first (e.g., WORKSHOP_PW_0)
   const envKey = `WORKSHOP_PW_${index}`;
   const password = process.env[envKey];
@@ -85,22 +120,51 @@ export function validatePasswordByIndex(index: number, password: string): boolea
     return result === 0;
   }
 
-  // No custom password - generate from title
+  // No custom password - use the deterministic password based on index and title
+  // We generate a consistent password for each doc by using the doc's title as a seed
   const { workshopDocs } = require('./workshopAccess');
   const doc = workshopDocs.find((d: any) => d.index === index);
 
   if (!doc) {
     // Fallback if doc not found
     const fallbackPassword = `chapter${index}`;
-    console.log(`[Password Check] Index: ${index}, Expected (fallback): "${fallbackPassword}", Got: "${password}"`);
     return password === fallbackPassword;
   }
 
-  // Generate password from title
-  const generatedPassword = generatePasswordFromTitle(doc.title, index);
-  console.log(`[Password Check] Index: ${index}, Title: "${doc.title}", Expected: "${generatedPassword}", Got: "${password}"`);
+  // Generate a deterministic password based on the doc title
+  // This ensures the same doc always has the same password
+  const deterministicPassword = generateDeterministicPassword(doc.title, index);
 
-  return password === generatedPassword;
+  return password === deterministicPassword;
+}
+
+/**
+ * Generate a deterministic 6-character password based on title and index
+ * This ensures the same doc always gets the same password
+ */
+export function generateDeterministicPassword(title: string, index: number): string {
+  // Create a simple seed from title and index
+  const seed = title.length + index + title.charCodeAt(0);
+
+  // Use the seed to pick characters
+  const uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lowercase = 'abcdefghjkmnpqrstuvwxyz';
+  const numbers = '23456789';
+  const special = '!@#$%^&*';
+
+  const allChars = uppercase + lowercase + numbers + special;
+
+  let password = '';
+  let seededRandom = seed;
+
+  // Generate 6 characters using seeded random
+  for (let i = 0; i < 6; i++) {
+    seededRandom = (seededRandom * 9301 + 49297) % 233280;
+    const index = Math.floor((seededRandom / 233280) * allChars.length);
+    password += allChars[index];
+  }
+
+  return password;
 }
 
 /**
@@ -180,7 +244,7 @@ export function getAllPasswords(): Array<{ index: number; title: string; slug: s
 
   return workshopDocs.map((doc: any) => {
     const customPassword = getPasswordByIndex(doc.index);
-    const password = customPassword || generatePasswordFromTitle(doc.title, doc.index);
+    const password = customPassword || generateDeterministicPassword(doc.title, doc.index);
 
     return {
       index: doc.index,

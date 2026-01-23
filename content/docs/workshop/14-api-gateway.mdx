@@ -1,0 +1,218 @@
+---
+title: "API Gateway HTTP API"
+description: "Expose the API Lambda using an HTTP API in API Gateway with routes, CORS, and with endpoint test."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+By the end of this phase, you'll have a public HTTP endpoint (API Gateway) that calls your API Lambda.
+
+Your React app will be able to call:
+
+```txt
+GET /persons
+GET /persons/{personId}/photos
+```
+
+<Callout type="info" title="Mental model: API Gateway vs Lambda">
+  <b>API Gateway</b> is the “front door” (public URL + routing + CORS).{" "}
+  <b>Lambda</b> is the “brain” (runs your Python code and returns JSON).
+</Callout>
+
+## Before you start
+
+You should already have:
+
+- Lambda: <code>beetroot-api</code> (from the previous phase)
+- The Lambda test works (returns JSON when invoked)
+
+<Callout type="tip" title="Region reminder">
+  Create the HTTP API in the same region as your Lambda (us-east-1), otherwise
+  the integration won't show up.
+</Callout>
+
+## Step 1: Create an HTTP API
+
+<Steps>
+  <Step>
+    ### Create the API
+
+1. Open <b>API Gateway</b>
+2. Click <b>Create API</b>
+3. Choose <b>HTTP API</b> → <b>Build</b>
+
+<Callout type="info" title="Why HTTP API (not REST API)?">
+  HTTP API is simpler and cheaper for basic GET routes. It's a great fit for
+  this workshop.
+</Callout>
+
+  </Step>
+
+  <Step>
+    ### Add the Lambda integration
+
+In the setup flow:
+
+1. Under <b>Integrations</b>, select <b>Lambda</b>
+2. Region: <b>us-east-1</b>
+3. Choose your Lambda: <code>beetroot-api</code>
+4. Continue
+
+<Callout type="tip" title="What “integration” means">
+  An integration is just “what should run when someone hits this route?”. Here,
+  the answer is your Lambda.
+</Callout>
+
+  </Step>
+
+  <Step>
+    ### Define routes
+
+Add these two routes:
+
+```text
+GET <code>/persons</code>
+GET <code>/persons/{personId}/photos</code>
+```
+
+For both routes, choose the same integration: <code>beetroot-api</code>.
+
+<Callout type="info" title="Why both routes use the same Lambda">
+  Your Lambda already routes based on <code>method</code> and <code>path</code>.
+  API Gateway just forwards the request.
+</Callout>
+
+  </Step>
+
+  <Step>
+    ### Enable CORS (important for React)
+
+In the API creation flow (or later: <b>API settings → CORS</b>):
+
+- <b>Allowed origins:</b> <code>*</code> (dev only)
+- <b>Allowed methods:</b> <code>GET, OPTIONS</code>
+- <b>Allowed headers:</b> <code>content-type</code>
+
+<Callout type="warning" title="CORS note">
+  <code>*</code> is fine for development. In production, set this to your real
+  frontend domain.
+</Callout>
+
+  </Step>
+
+  <Step>
+    ### Stage + deploy
+
+HTTP APIs typically use the <code>$default</code> stage with <b>Auto-deploy</b>.
+
+- If you see <b>Auto-deploy</b>, keep it <b>ON</b>
+- Finish creation / deploy
+
+<Callout type="tip" title="What a stage is">
+  A stage is a deployed version of your API. <code>$default</code> keeps things
+  simple for this workshop.
+</Callout>
+
+  </Step>
+</Steps>
+
+## Step 2: Confirm Lambda invoke permission
+
+API Gateway must be allowed to invoke your Lambda.
+
+Usually the console adds this automatically, but you can verify:
+
+- Lambda → <code>beetroot-api</code> → <b>Configuration → Permissions</b>
+- Look for a statement mentioning <code>apigateway.amazonaws.com</code>
+
+<Callout type="info" title="If the permission is missing">
+  If API Gateway can't invoke Lambda, you'll usually get <b>403</b> or{" "}
+  <b>500</b>. We'll cover quick fixes in Common issues.
+</Callout>
+
+## Step 3: Get Invoke URL and test
+
+Go to:
+
+- API Gateway → your API → <b>Stages</b> → <code>$default</code>
+- Copy the <b>Invoke URL</b>
+
+### Test Route 1: list persons
+
+```bash
+curl "<INVOKE_URL>/persons"
+```
+
+### Test Route 2: photos for one person
+
+1. Copy one <code>personId</code> from the <code>/persons</code> response
+2. Run:
+
+```bash
+curl "<INVOKE_URL>/persons/<PERSON_ID>/photos"
+```
+
+<Callout type="tip" title="What “success” looks like">
+  You should get JSON back (and not <code>403</code> / <code>500</code>). If{" "}
+  <code>/persons</code> returns an empty list, it usually means your Persons
+  table is empty (upload more photos first).
+</Callout>
+
+## Where logs are
+
+- <b>Lambda logs:</b> CloudWatch → Log groups →
+  <code>/aws/lambda/beetroot-api</code>
+- <b>API Gateway access logs:</b> optional (API Gateway → Stages → enable access
+  logging)
+
+## Common issues
+
+<Tabs items={["403 Forbidden", "500 Internal Server Error", "CORS in browser only"]} groupId="phase13b-issues" persist> <Tab value="403 Forbidden">
+Most common causes:
+
+```
+- API Gateway does not have permission to invoke the Lambda
+- You're calling the wrong URL/stage
+
+Check:
+
+- Lambda → <code>beetroot-api</code> → <b>Permissions</b> includes <code>apigateway.amazonaws.com</code>
+- API Gateway → <b>Stages</b> → using the correct <b>Invoke URL</b>
+```
+
+  </Tab>
+
+  <Tab value="500 Internal Server Error">
+    This usually means the Lambda crashed.
+
+```
+Check:
+
+- CloudWatch logs: <code>/aws/lambda/beetroot-api</code>
+- Common causes:
+  - Missing env vars (table names)
+  - JSON serialization errors (Decimals) if the previous phase fix wasn't applied
+```
+
+  </Tab>
+
+  <Tab value="CORS in browser only">
+    If <code>curl</code> works but the browser fails:
+
+```
+- Ensure CORS is enabled in API Gateway (Allowed origins/methods/headers)
+- Ensure your Lambda response includes CORS headers (we added them in <code>_resp</code>)
+```
+
+  </Tab>
+</Tabs>
+
+## Checkpoint
+
+Answer this before moving on:
+
+When you hit <code>GET /persons</code>, do you get a <b>200</b> with JSON back, or an error (<b>403</b>/<b>500</b>)?

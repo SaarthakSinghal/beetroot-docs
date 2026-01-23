@@ -15,7 +15,8 @@
     "10-search-faces",
     "11-index-faces",
     "12-occurrences",
-    "13-api-lambda"
+    "13-api-lambda",
+    "14-api-gateway"
   ],
   "description": "Step-by-step build path"
 }
