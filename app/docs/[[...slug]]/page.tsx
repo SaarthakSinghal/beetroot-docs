@@ -5,8 +5,6 @@ import { getMDXComponents } from '@/mdx-components';
 import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
 import { LLMCopyButton, ViewOptions } from '@/components/ai/page-actions';
-import { getMaxUnlockedIndex } from '@/lib/session';
-import { NavLockHandler } from '@/components/nav-lock-handler';
 
 export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const params = await props.params;
@@ -20,11 +18,8 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
     branch: 'main',
   };
 
-  const maxUnlockedIndex = await getMaxUnlockedIndex();
-
   return (
     <DocsPage toc={page.data.toc} full={page.data.full} tableOfContent={{ style: "clerk"}}>
-      <NavLockHandler maxUnlockedIndex={maxUnlockedIndex} />
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription className="mb-0">{page.data.description}</DocsDescription>
       <div className="flex flex-row gap-2 items-center border-b pb-6">

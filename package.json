@@ -8,8 +8,7 @@
     "start": "next start",
     "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
     "postinstall": "fumadocs-mdx",
-    "lint": "eslint",
-    "passwords": "bun run scripts/print-passwords.ts"
+    "lint": "eslint"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
@@ -18,7 +17,6 @@
     "fumadocs-mdx": "14.2.5",
     "fumadocs-twoslash": "^3.1.12",
     "fumadocs-ui": "16.4.7",
-    "iron-session": "^8.0.4",
     "lucide-react": "^0.562.0",
     "next": "16.1.1",
     "react": "^19.2.3",
