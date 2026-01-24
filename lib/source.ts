@@ -4,18 +4,17 @@ import { lucideIconsPlugin } from 'fumadocs-core/source/lucide-icons';
 
 // See https://fumadocs.dev/docs/headless/source-api for more info
 export const source = loader({
-  baseUrl: process.env.NODE_ENV === 'production' ? '/beetroot/docs' : '/docs',
+  baseUrl: '/docs',
   source: docs.toFumadocsSource(),
   plugins: [lucideIconsPlugin()],
 });
 
 export function getPageImage(page: InferPageType<typeof source>) {
   const segments = [...page.slugs, 'image.png'];
-  const basePath = process.env.NODE_ENV === 'production' ? '/beetroot' : '';
 
   return {
     segments,
-    url: `${basePath}/og/docs/${segments.join('/')}`,
+    url: `/og/docs/${segments.join('/')}`,
   };
 }
 
