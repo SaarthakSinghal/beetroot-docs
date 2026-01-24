@@ -9,7 +9,7 @@ import { Steps, Step } from "fumadocs-ui/components/steps";
 
 ## Goal
 
-After this phase, your backend will be able to power two UI screens:
+This phase helps in the build of the UI screen, which shows:
 
 - **People grid** → list people with a thumbnail + `photoCount`
 - **Person detail** → click a person → fetch all photos where they appear
@@ -20,7 +20,7 @@ We achieve this by writing two kinds of records:
 - **`Occurrences` table**: one item per `(personId, photoId)` pair
 
 <Callout type="info" title="What is a personId in this workshop?">
-  We use Rekognition’s `FaceId` as `personId`. That means: when Rekognition says
+  We use Rekognition's `FaceId` as `personId`. That means if Rekognition says
   “this is the same face,” you get the same `personId`.
 </Callout>
 
@@ -38,39 +38,27 @@ Now we also **save the relationships** so data is queryable later.
       <li>Search/Index faces (get `personId`)</li>
     </ul>
 
-    But DynamoDB didn’t store:
+    But DynamoDB didn't store:
     <ul>
-      <li>“Which photos belong to this person?”</li>
       <li>“How many photos does this person appear in?”</li>
+      <li>“Which photos belong to this person?”</li>
     </ul>
 
   </Tab>
 
   <Tab value="After">
     For every detected face you now also write:
-    <ul>
-      <li>
-        <b>Persons</b> → increment `photoCount` + set a cover thumbnail (`repThumbKey`)
-      </li>
-      <li>
-        <b>Occurrences</b> → store one row linking `personId` to every `photoId` it appears
-      </li>
-    </ul>
+      - <b>Persons</b> → increment `photoCount` + set a cover thumbnail (`repThumbKey`)
+      - <b>Occurrences</b> → store one row linking `personId` to every `photoId` it appears
   </Tab>
 </Tabs>
 
 ## Environment variables
 
-Your Lambda now reads two more table names.
-
 - `PERSONS_TABLE` = `Persons`
 - `OCCURRENCES_TABLE` = `Occurrences`
 
 ## Step 1: Add table handles
-
-### What this adds
-
-You create DynamoDB “table objects” so you can write items easily.
 
 ```python
 PERSONS_TABLE_NAME = os.environ.get("PERSONS_TABLE", "Persons")
@@ -81,7 +69,7 @@ occ_table = ddb.Table(OCCURRENCES_TABLE_NAME)
 
 ```
 
-## Step 3: Store `boundingBox` safely
+## Step 2: Store `boundingBox` safely
 
 DynamoDB prefers numbers as `Decimal` (not Python floats).
 So we convert the bounding box into a “DynamoDB friendly” map.
@@ -121,7 +109,7 @@ def as_decimal_bbox(bbox: dict) -> dict:
   using the same bbox.
 </Callout>
 
-## Step 4: Update `Persons` table
+## Step 3: Update `Persons` table
 
 Create a new person if not found, else increment `photoCount`
 
@@ -129,7 +117,7 @@ Create a new person if not found, else increment `photoCount`
 
 - `personId` (PK)
 - `createdAt` (set once)
-- `repThumbKey` (set once — the “cover photo”)
+- `repThumbKey` (the “cover photo” set once)
 - `photoCount` (increment each time we see this person in a new photo)
 
 <Tabs items={["Code", "Input", "Output"]} groupId="phase12-upsert-person" persist> <Tab value="Code">
@@ -178,18 +166,34 @@ def upsert_person(person_id: str, rep_thumb_key: str, created_at: str):
   `createdAt` or change the “cover thumbnail”.
 </Callout>
 
-## Step 5: Write `Occurrences` table (person ↔ photo link)
+## Step 4: Write `Occurrences` table (person ↔ photo link)
+
+### Capture `confidence`
+
+Before writing an item into the **Occurrences** table, extract the per-face confidence score from Rekognition's `FaceDetails`. You'll use this value later when you call `write_occurrence(...)`.
+
+```python
+thumb_keys = []
+
+for idx, fd in enumerate(face_details, start=1):
+    bbox = fd.get("BoundingBox", {})
+    confidence = fd.get("Confidence")  # [!code ++]
+
+    x1, y1, x2, y2 = bbox_to_pixels(bbox, img_w, img_h)
+
+    face_im = im.crop((x1, y1, x2, y2))
+```
 
 ### What we want in `Occurrences`
 
 One row per person per photo:
 
-- `personId` (PK)
-- `photoId` (SK)
+- `personId` (Primary Key)
+- `photoId` (Sort Key)
 - `photoBucket`, `photoKey`
 - `thumbKey`
 - `boundingBox`
-- `confidence` (optional)
+- `confidence`
 
 <Tabs items={["Code", "Input", "Output"]} groupId="phase12-occurrence" persist> <Tab value="Code">
 
@@ -210,6 +214,7 @@ def write_occurrence(
         "photoKey": photo_key,
         "thumbKey": thumb_key,
         "boundingBox": as_decimal_bbox(bbox),
+        "confidence": confidence
     }
     if confidence is not None:
         item["confidence"] = Decimal(str(confidence))
@@ -243,17 +248,17 @@ def write_occurrence(
   → returns all related `photoId`'s fast.
 </Callout>
 
-## Step 6: Call these functions
+## Step 5: Call these functions
 
 1. Add all the functions definitions before `lambda_handler`
 2. Once you have `person_id` and `thumb_key` for a face, you add these two writes:
-
-3. update/create the person
-4. write the occurrence row
+   - update/create the person
+   - write the occurrence row
 
 at the end of the face loop.
 
 ```python
+    # continuing from the face loop...
     thumb_keys.append(thumb_key)
 
     # increment photoCount (for "most frequent" People grid)
@@ -278,35 +283,32 @@ at the end of the face loop.
 print(f"Wrote Persons/Occurrences for photoId={photo_id}")
 ```
 
-## Checkpoint: what you should verify
+## Test
 
 <Steps>
   <Step>
-    ### Persons table
+    ### `Persons` table
+
     Upload 2 photos with the same 3 people.
 
-```
-In <b>DynamoDB → Persons</b>:
-<ul>
-  <li>You should still see <b>3</b> items (not 6)</li>
-  <li>`photoCount` should increase (e.g., 1 → 2)</li>
-  <li>`repThumbKey` should be present</li>
-</ul>
-```
+    In <b>DynamoDB → `Persons`</b>:
+        - You should still see <b>3</b> items (not 6)
+        - `photoCount` should increase (e.g., 1 → 2)
+        - `repThumbKey` should be present
 
   </Step>
 
   <Step>
-    ### Occurrences table
+    ### `Occurrences` table
+
     Pick one `personId` and query by it.
 
-```
-In <b>DynamoDB → Occurrences</b>:
+In <b>DynamoDB → `Occurrences`</b>:
+
 <ul>
   <li>Partition key = that `personId`</li>
   <li>You should see 2 rows with different `photoId`</li>
 </ul>
-```
 
   </Step>
 </Steps>
@@ -334,5 +336,5 @@ In <b>DynamoDB → Occurrences</b>:
 
 ## Suggestions (optional)
 
-- If you later notice `photoCount` is increasing too fast, it usually means the same photo is being reprocessed under a different key (or idempotency isn’t working).
-- If you want “one occurrence per face” (instead of per person-photo), you can add a third key like `faceIndex` later—but for beginners, person-photo is simpler.
+- If you later notice `photoCount` is increasing too fast, it usually means the same photo is being reprocessed under a different key (or idempotency isn't working).
+- If you want “one occurrence per face” (instead of per person-photo), you can add a third key such as `faceIndex` later—but for beginners, person-photo is simpler.

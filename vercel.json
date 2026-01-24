@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/beetroot",
+      "destination": "/beetroot/index"
+    },
+    {
+      "source": "/beetroot/:path*",
+      "destination": "/:path*"
+    }
+  ]
+}

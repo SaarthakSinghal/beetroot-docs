@@ -37,11 +37,11 @@ From earlier phases, your DynamoDB data is now ready:
 - **Occurrences**: for a `personId`, gives `photoId` + `thumbKey`
 - **Photos**: for a `photoId`, gives original `s3Bucket` + `s3Key`
 
-## Create the API Lambda
+## Create API Lambda
 
 <Steps>
   <Step>
-    ### Create a new Lambda function
+    ### Create function
 
     AWS Console → **Lambda → Create function**
 
@@ -234,17 +234,12 @@ We only accept paths like:
 
 - `/persons/<personId>/photos`
 
-```python
-parts = path.strip("/").split("/")
-if len(parts) != 3:
-    return _resp(400, {"error": "bad path"})
-person_id = parts[1]
-```
-
 <Tabs items={["Code", "Input", "Output"]} groupId="phase13-parse-personid" persist>
  <Tab value="Code">
 ```python
 parts = path.strip("/").split("/")
+if len(parts) != 3:
+    return _resp(400, {"error": "bad path"})
 person_id = parts[1]
  ```
 </Tab>
@@ -282,13 +277,6 @@ The **Occurrences table** is designed exactly for this query:
 - Sort key: `photoId`
 
 So we can fetch all photos for a person using a single query.
-
-```python
-occ = OCC_TABLE.query(
-    KeyConditionExpression=Key("personId").eq(person_id),
-    Limit=200
-).get("Items", [])
-```
 
 <Tabs items={["Code", "Input", "Output"]} groupId="phase13-occ-query" persist>
 <Tab value="Code">
@@ -336,7 +324,9 @@ for o in occ:
     if not photo_id:
         continue
 
-    p = PHOTOS_TABLE.get_item(Key={"photoId": photo_id}).get("Item")
+    p = PHOTOS_TABLE.get_item(
+        Key={"photoId": photo_id}
+    ).get("Item")
     if not p:
         continue
 ```

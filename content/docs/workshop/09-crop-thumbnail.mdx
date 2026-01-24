@@ -48,7 +48,7 @@ Compared to the previous phase (`DetectFaces`), the Lambda now:
 - converts `boundingBox` <b>ratios → pixels</b> safely (with clamping)
 - uploads thumbnails into a stable S3 path per photo
 
-### Part 1: New imports
+## Part 1: New imports
 
 We add two new imports for image byte handling and cropping:
 
@@ -65,9 +65,9 @@ from PIL import Image
   in `BytesIO`.
 </Callout>
 
-### Part 2: New AWS Client + Env vars
+## Part 2: Configurations
 
-#### S3 Client
+### 2.1 S3 Client
 
 We add an S3 client to download the original photo and upload thumbnails.
 
@@ -78,7 +78,7 @@ rek = boto3.client("rekognition")
 s3 = boto3.client("s3") ## [!code ++]
 ```
 
-#### Thumbnails Destination
+### 2.2 Thumbnails Destination
 
 We read where thumbnails should be stored:
 
@@ -92,11 +92,11 @@ THUMBS_PREFIX = os.environ.get("THUMBS_PREFIX", "faces-thumbs/")
   is missing.
 </Callout>
 
-### Part 3: Bounding box helpers
+## Part 3: Bounding box helpers
 
 Rekognition returns bounding boxes as ratios (`0..1`) and sometimes edge cases can go slightly outside the range.
 
-#### Clamp values
+### 3.1 Clamp values
 
 <Tabs items={["Code", "Example"]} groupId="phase9-clamp01" persist>
 
@@ -125,7 +125,7 @@ def clamp01(x: float) -> float:
 
   </Tabs>
 
-#### Convert ratios → pixels
+### 3.2 Convert ratios → pixels
 
 This turns `Left/Top/Width/Height` into pixel coordinates that Pillow can crop.
 
@@ -181,12 +181,12 @@ These are the pixel crop coordinates Pillow needs.
 
 </Tabs>
 
-<Callout type="info" title="What’s the clamp for?">
+<Callout type="info" title="What's the clamp for?">
   Clamping prevents invalid crop coordinates when bounding boxes are near image
   edges.
 </Callout>
 
-### Part 4: Download the image
+## Part 4: Download the image
 
 After `DetectFaces` returns `face_details`, we fetch the same image from S3 and load it into Pillow to crop faces.
 
@@ -198,7 +198,7 @@ im = Image.open(BytesIO(img_bytes)).convert("RGB")
 img_w, img_h = im.size
 ```
 
-**1) Download the S3 object**
+### 4.1 Download the S3 object
 
 ```python
 obj = s3.get_object(Bucket=bucket, Key=key)
@@ -206,7 +206,7 @@ obj = s3.get_object(Bucket=bucket, Key=key)
 
 Fetches the object metadata + body stream from S3.
 
-**2) Read bytes from the streaming body**
+### 4.2 Read bytes from the streaming body
 
 ```python
 img_bytes = obj["Body"].read()
@@ -215,11 +215,11 @@ img_bytes = obj["Body"].read()
 Extracts the `Body` (a streaming response) and reads it fully into raw bytes.
 
 <Callout type="info" title="Why we need it?">
-  Pillow can’t crop a streaming object directly, it needs bytes (or a file-like
+  Pillow can't crop a streaming object directly, it needs bytes (or a file-like
   wrapper).
 </Callout>
 
-**3) Open the image with Pillow**
+### 4.3 Open the image with Pillow
 
 ```python
 im = Image.open(BytesIO(img_bytes)).convert("RGB")
@@ -229,7 +229,7 @@ im = Image.open(BytesIO(img_bytes)).convert("RGB")
 - Opens it using Pillow,
 - Converts it to `RGB`.
 
-**4) Capture image dimensions**
+### 4.4 Capture image dimensions
 
 ```python
 img_w, img_h = im.size
@@ -237,7 +237,7 @@ img_w, img_h = im.size
 
 Reads the image width and height in pixels.
 
-### Part 5: Crop and upload thumbnails
+## Part 5: Crop and upload thumbnails
 
 For every detected face, we:
 
@@ -248,7 +248,10 @@ For every detected face, we:
 5. upload it to S3
 6. store the uploaded key in `thumb_keys`
 
-#### Step 1: Loop over each detected face
+<Steps>
+
+  <Step>
+    ### 5.1 Loop over each detected face
 
 ```python
 thumb_keys = []
@@ -260,7 +263,9 @@ for idx, fd in enumerate(face_details, start=1):
 - `idx` becomes `1, 2, 3...` so we can name thumbnails
   like `face_1.jpg`, `face_2.jpg`, etc.
 
-#### Step 2: Convert the face bounding box to pixels
+</Step>
+  <Step>
+  ### 5.2 Convert the face bounding box to pixels
 
 ```python
 bbox = fd.get("BoundingBox", {})
@@ -274,17 +279,21 @@ x1, y1, x2, y2 = bbox_to_pixels(bbox, img_w, img_h)
   - `(x1, y1)` is top-left
   - `(x2, y2)` is bottom-right
 
-#### Step 3: Crop the face from image
+</Step>
+<Step>
+### 5.3 Crop the face from image
 
 ```python
 face_im = im.crop((x1, y1, x2, y2))
 ```
 
-- Pillow’s `crop` takes a rectangle and returns a new image containing only that region.
+- Pillow's `crop` takes a rectangle and returns a new image containing only that region.
 
 This is the **face thumbnail**.
 
-#### Step 4: Save the thumbnail to memory as JPEG
+  </Step>
+  <Step>
+  ### 5.4 Save the thumbnail to memory as JPEG
 
 ```python
 out = BytesIO()
@@ -302,7 +311,9 @@ out.seek(0)
   pointer is at the end.
 </Callout>
 
-#### Step 5: Build the thumbnail S3 path (key)
+  </Step>
+  <Step>
+  ### 5.5 Build the thumbnail S3 path (key)
 
 ```python
 thumb_key = f"{THUMBS_PREFIX}{photo_id}/face_{idx}.jpg"
@@ -313,17 +324,21 @@ This creates keys like:
 - `faces-thumbs/a1f09c2b7e3d4a91b6c2/face_1.jpg`
 - `faces-thumbs/a1f09c2b7e3d4a91b6c2/face_2.jpg`
 
-<Callout type="info" title="Why this S3 path?">
+  <Callout type="info" title="Why this S3 path?">
 
-    Using `<photoId>/face_1.jpg` keeps thumbnails grouped per photo, which makes:
+      Using `<photoId>/face_1.jpg` keeps thumbnails grouped per photo, which makes:
 
-    - browsing in S3 easy
-    - debugging easy (everything for a photo is in one folder)
-    - cleanup easy (delete one folder to remove all thumbs for a photo)
+      - browsing in S3 easy
+      - debugging easy (everything for a photo is in one folder)
+      - cleanup easy (delete one folder to remove all thumbs for a photo)
 
-</Callout>
+  </Callout>
 
-### Step 6: Upload to thumbs bucket
+</Step>
+
+</Steps>
+
+## Part 6: Upload to thumbs bucket
 
 ```python
 s3.put_object(
@@ -337,7 +352,7 @@ s3.put_object(
 - uploads the in-memory bytes to S3
 - sets `ContentType` so the file previews correctly in the console/browser
 
-### Step 7: Store the key we uploaded
+## Part 7: Store the key we uploaded
 
 ```python
 thumb_keys.append(thumb_key)
@@ -527,7 +542,7 @@ def lambda_handler(event, context):
 
 <Steps>
   <Step>
-    ### Upload a group photo
+    ## Upload a group photo
 
 ```bash
 aws s3 cp ./v2-test-photos/group4.jpg s3://beetroot-raw/photos-raw/ --region us-east-1
@@ -542,7 +557,7 @@ In CloudWatch logs, confirm:
   </Step>
 
   <Step>
-    ### Verify thumbnails in S3
+    ## Verify thumbnails in S3
 
 ```
 Go to the thumbs bucket and confirm files exist under:
@@ -573,7 +588,7 @@ Go to the thumbs bucket and confirm files exist under:
   </Tab>
 
   <Tab value="No module named PIL">
-  If you see `No module named 'PIL'`, your Pillow layer isn’t attached or the layer zip structure is wrong.
+  If you see `No module named 'PIL'`, your Pillow layer isn't attached or the layer zip structure is wrong.
 
   </Tab>
 

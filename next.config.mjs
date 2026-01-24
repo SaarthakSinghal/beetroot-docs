@@ -6,6 +6,10 @@ const withMDX = createMDX();
 const config = {
   reactStrictMode: true,
   serverExternalPackages: ['typescript', 'twoslash'],
+  // Configure base path for subdirectory deployment (production only)
+  basePath: process.env.NODE_ENV === 'production' ? '/beetroot' : '',
+  // Ensure asset prefixes are correct (production only)
+  assetPrefix: process.env.NODE_ENV === 'production' ? '/beetroot' : '',
   async rewrites() {
     return [
       {
