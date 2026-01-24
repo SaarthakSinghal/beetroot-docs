@@ -14,7 +14,9 @@ export default function Layout({ children }: LayoutProps<'/'>) {
       <body className="flex flex-col min-h-screen">
         <RootProvider
           search={{
-            api: `${basePath}/api/search`,
+            options: {
+              api: `${basePath}/api/search`,
+            },
           }}
         >
           {children}
