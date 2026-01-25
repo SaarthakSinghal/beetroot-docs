@@ -19,7 +19,8 @@
     "14-api-lambda",
     "15-api-gateway",
     "16-presigned-url",
-    "17-frontend"
+    "17-frontend",
+    "credits"
   ],
   "description": "Step-by-step build path"
 }
