@@ -1,11 +1,11 @@
 {
   "root": true,
   "title": "Workshop",
+  "icon": "SquaresSubtract",
   "pages": [
     "01-overview",
     "02-aws-resources",
-    "03-architecture",
-    "03-iam",
+    "03-ingest-iam",
     "04-upload-flow-raw",
     "05-ingest-lambda-s3-trigger",
     "06-ingest-lambda",
@@ -15,8 +15,11 @@
     "10-search-faces",
     "11-index-faces",
     "12-people-clusters",
-    "13-api-lambda",
-    "14-api-gateway"
+    "13-iam-api",
+    "14-api-lambda",
+    "15-api-gateway",
+    "16-presigned-url",
+    "17-frontend"
   ],
   "description": "Step-by-step build path"
 }

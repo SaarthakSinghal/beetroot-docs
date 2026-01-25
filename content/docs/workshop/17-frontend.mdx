@@ -1,0 +1,30 @@
+---
+title: "Connect the Frontend"
+description: "Point your frontend to the backend by the API Gateway URL."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+import { GithubInfo } from "fumadocs-ui/components/github-info";
+
+## You made it 🎉
+
+You've built the full backend pipeline:
+
+- upload photos → detect faces
+- crop thumbnails → match/index faces
+- store People + Occurrences in DynamoDB
+- expose an API + return pre-signed URLs for the frontend
+
+At this point, your backend is **production-shaped** (private buckets + temporary URLs), and your UI just needs the API endpoint.
+
+## Frontend source code
+
+Your frontend is already set up in this repo:
+
+<GithubInfo owner="saarthaksinghal" repo="aws-images" />
+
+<Callout type="info" title="Good news">
+  Connecting the frontend to the backend is very simple and the exact steps are
+  already written inside the repo's <code>README.md</code> file.
+</Callout>

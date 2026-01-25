@@ -1,0 +1,572 @@
+---
+title: "Pre-signed Thumbnail URLs"
+description: "Update the API Lambda to return temporary S3 URLs so frontend can render images without making buckets public."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+
+## Goal
+
+Right now, the API returns S3 **keys** like `repThumbKey` or `photoKey`, but the browser cannot render an S3 key directly.
+
+In this phase, you will update your **API Lambda** so it returns **pre-signed URLs**:
+
+- **People grid** (`GET /persons`)
+  - `repThumbKey`
+  - `repThumbUrl` (frontend renders this)
+
+- **Person detail** (`GET /persons/{personId}/photos`)
+  - `photoURL` (full photo URL for the grid)
+
+<Callout type="info" title="Why pre-signed URLs?">
+  Pre-signed URLs let your frontend access private S3 objects for a short time
+  (for example, 1 hour) without making your bucket public.
+</Callout>
+
+## What changes in this phase
+
+<Tabs items={["Before", "After"]} groupId="presign-what-changes" persist> <Tab value="Before">
+The API returned S3 metadata:
+
+<ul>
+  <li>
+    <code>repThumbKey</code>
+  </li>
+  <li>
+    <code>photoBucket</code> + <code>photoKey</code>
+  </li>
+  <li>
+    <code>thumbKey</code>
+  </li>
+</ul>
+
+But the frontend still couldn't render images directly.
+
+  </Tab>
+
+  <Tab value="After">
+    The API also returns URLs:
+
+<ul>
+  <li>
+    <code>repThumbUrl</code> (People thumbnail)
+  </li>
+  <li>
+    <code>photoURL</code> (full photo for Person)
+  </li>
+</ul>
+
+Now React can do:
+
+- `<img src={repThumbUrl} />`
+- `<img src={photoURL} />`
+
+</Tab>
+</Tabs>
+
+## Update API Lambda IAM Role
+
+Your API Lambda already reads DynamoDB tables (`Persons` / `Occurrences` / `Photos`). Now we also need S3 permissions so that the API can generate URLs that actually work in the browser.
+
+<Steps>
+  <Step>
+    ### Update inline policy
+
+    1. Open the role: <b>IAM → Roles → beetroot-api-role</b>
+    2. **Permissions** → `BeetrootAPIPolicy`
+    3.  Use the <b>Visual editor</b>
+
+<Tabs items={["S3: Raw (Read)", "S3: Thumbs (Read)", "S3: Thumbs (List)"]} groupId="iam-editor-api" persist>
+
+<Tab value="S3: Raw (Read)">
+
+    1. Select service: <b>S3</b>
+
+    2. Under <b>Actions</b>:
+       - Expand <b>Read</b>
+       - Select: <code>GetObject</code>
+
+    3. Under <b>Resources</b>:
+       - Choose <b>Specific</b>
+       - In the <b>Object</b> section, click <b>Add ARN</b>
+
+    4. In the <b>Add ARN</b> popup, fill:
+       - <b>Resource bucket name:</b> <code>beetroot-raw</code>
+       - <b>Resource object name:</b> <code>photos-raw/*</code>
+
+       The ARN should resolve to:
+       - <b>Resource ARN:</b> <code>arn:aws:s3:::beetroot-raw/photos-raw/*</code>
+
+    5. Click <b>Add</b> to save the ARN.
+
+    6. Click **Add additional permissions** (for S3 Thumbs Bucket `GetObject`)
+
+  </Tab>
+
+      <Tab value="S3: Thumbs (Read)">
+
+    1. Select service: <b>S3</b>
+
+    2. Under <b>Actions</b>:
+       - Expand <b>Read</b>
+       - Select: <code>GetObject</code>
+
+    3. Under <b>Resources</b>:
+       - Choose <b>Specific</b>
+       - In the <b>Object</b> section, click <b>Add ARN</b>
+
+    4. In the <b>Add ARN</b> popup, fill:
+       - <b>Resource bucket name:</b> <code>beetroot-thumbs</code>
+       - <b>Resource object name:</b> <code>faces-thumbs/*</code>
+
+       The ARN should resolve to:
+       - <b>Resource ARN:</b> <code>arn:aws:s3:::beetroot-thumbs/faces-thumbs/*</code>
+
+    5. Click <b>Add</b> to save the ARN.
+
+    6. Click **Add additional permissions** (for S3 Thumbs Bucket `ListBucket`)
+
+  </Tab>
+
+   <Tab value="S3: Thumbs (List)">
+
+    1. Select service: <b>S3</b>
+
+    2. Under <b>Actions</b>:
+       - Expand <b>List</b>
+       - Select: <code>ListBucket</code>
+
+    3. Under <b>Resources</b>:
+       - Choose <b>Specific</b>
+       - In the <b>bucket</b> section, click <b>Add ARN</b>
+
+    4. In the <b>Add ARN</b> popup, fill:
+       - <b>Resource bucket name:</b> <code>beetroot-thumbs</code>
+
+       The ARN should resolve to:
+       - <b>Resource ARN:</b> <code>arn:aws:s3:::beetroot-thumbs</code>
+
+    5. Click <b>Add</b> to save the ARN.
+
+    <Callout type="info" title="Why ListBucket too?">
+
+Some S3 requests against the bucket endpoint may require a bucket-level
+permission check.
+
+Allowing <code>ListBucket</code> only on the thumbs bucket (optionally limited
+to the `faces-thumbs/`prefix) prevents <code>AccessDenied</code> when
+opening a pre-signed URL in the browser.
+
+</Callout>
+
+  </Tab>
+
+</Tabs>
+
+  </Step>
+
+  <Step>
+    ### Save the inline policy
+
+    1. Click <b>Next</b>
+    2. Click on <b>Save changes</b>
+
+  </Step>
+</Steps>
+
+## Updated Policy JSON
+
+If you prefer pasting JSON instead of using the visual editor, use this and replace bucket names if yours differs:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DynamoReadForApi",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:<ACCOUNT_ID>:table/Persons",
+        "arn:aws:dynamodb:us-east-1:<ACCOUNT_ID>:table/Occurrences",
+        "arn:aws:dynamodb:us-east-1:<ACCOUNT_ID>:table/Photos"
+      ]
+    },
+    {
+      "Sid": "ThumbsGetObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::beetroot-thumbs/faces-thumbs/*"
+    },
+    {
+      "Sid": "ThumbsListBucket",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::beetroot-thumbs",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["faces-thumbs/*"]
+        }
+      }
+    },
+    {
+      "Sid": "AllowReadRawPhotosForPresign",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ["arn:aws:s3:::beetroot-raw/photos-raw/*"]
+    }
+  ]
+}
+```
+
+## Update API Lambda
+
+### Code Changes
+
+- Adds an S3 client + pre-sign helper
+- Route 1 (`GET /persons`) returns `repThumbUrl`
+- Route 2 (`GET /persons/{personId}/photos`) returns `photoURL` (and `thumbURL`)
+
+## Part 1: Add the S3 client + env vars
+
+- `THUMBS_BUCKET` = `beetroot-thumbs`
+- `PRESIGN_EXPIRES` = `3600` (optional)
+
+```python
+s3 = boto3.client("s3")
+
+THUMBS_BUCKET = os.environ["THUMBS_BUCKET"]
+PRESIGN_EXPIRES = int(os.environ.get("PRESIGN_EXPIRES", "3600"))
+```
+
+<Callout type="info" title="Where does the raw bucket come from?">
+  We don't need a new env var for raw photos because the raw bucket + key are
+  already stored in DynamoDB (Occurrences or Photos).
+</Callout>
+
+## Part 2: Helper to generate pre-signed GET URL
+
+### What this does
+
+Given `(bucket, key)`, it returns a temporary HTTPS URL that can be used in the browser.
+
+```python
+def presign_get_object(bucket: str, key: str) -> str:
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=PRESIGN_EXPIRES,
+    )
+```
+
+## Part 3: Patch Route 1 — return `repThumbUrl`
+
+### What this route did before
+
+- scanned `Persons`
+- sorted by `photoCount`
+- returned the raw items (including `repThumbKey`)
+
+### What we add now
+
+Before returning, build a clean list where each person includes:
+
+- `repThumbKey`
+- `repThumbUrl` (generated from that key)
+
+```python
+out = []
+for p in items[:100]:
+    rep_key = p.get("repThumbKey")
+    rep_url = presign_get_object(THUMBS_BUCKET, rep_key) if rep_key else None
+    out.append({
+        "personId": p.get("personId"),
+        "photoCount": p.get("photoCount", 0),
+        "repThumbKey": rep_key,
+        "repThumbUrl": rep_url,
+    })
+
+return _resp(200, {"persons": out})
+```
+
+<Tabs items={["Code", "Input", "Output"]} groupId="phase14b-route1" persist> <Tab value="Code">
+
+```python
+rep_key = p.get("repThumbKey")
+rep_url = presign_get_object(THUMBS_BUCKET, rep_key) if rep_key else None
+```
+
+  </Tab>
+
+  <Tab value="Input">
+    Example `Persons` item:
+
+```json
+{
+  "personId": "0c7d...",
+  "photoCount": 2,
+  "repThumbKey": "faces-thumbs/0c7d.../fe40..._face_1.jpg"
+}
+```
+
+  </Tab>
+
+  <Tab value="Output">
+    UI-ready entry:
+
+```json
+{
+  "personId": "0c7d...",
+  "photoCount": 2,
+  "repThumbKey": "faces-thumbs/0c7d.../fe40..._face_1.jpg",
+  "repThumbUrl": "https://...signed-url..."
+}
+```
+
+  </Tab>
+</Tabs>
+
+<Callout type="tip" title="Why return both key and URL?">
+  The key is stable metadata (good for debugging and storage). The URL is
+  temporary and may expire, so frontend should treat it as a render-only field.
+</Callout>
+
+## Part 4: Patch Route 2 — return `photoURL`
+
+It returns the list of photo appearances. Now we add:
+
+- `photoURL` → pre-signed URL for the full image
+
+### Resolve raw photo location
+
+Depending on what you stored, `Occurrences` may already contain:
+
+- `photoBucket` + `photoKey`
+
+If not, fallback to the `Photos` table using `photoId`.
+
+```python
+    photo_bucket = o.get("photoBucket")
+    photo_key = o.get("photoKey")
+
+    if not photo_bucket or not photo_key:
+        p = PHOTOS_TABLE.get_item(Key={"photoId": photo_id}).get("Item")
+        if not p:
+            continue
+        photo_bucket = photo_bucket or p.get("s3Bucket")
+        photo_key = photo_key or p.get("s3Key")
+```
+
+### Generate URL
+
+```python
+    photo_url = presign_get_object(photo_bucket, photo_key) if (photo_bucket and photo_key) else None
+```
+
+### Build the response object
+
+```python
+    photos.append(
+        {
+            "photoId": photo_id,
+            "photoBucket": photo_bucket,
+            "photoKey": photo_key,
+            "thumbKey": thumb_key,
+            "photoURL": photo_url,
+        }
+    )
+```
+
+## Updated API Lambda code
+
+```python title="beetroot-api/lambda_function.py" lineNumbers
+import json
+import os
+from decimal import Decimal
+
+import boto3
+from boto3.dynamodb.conditions import Key
+
+ddb = boto3.resource("dynamodb")
+s3 = boto3.client("s3")
+
+PERSONS_TABLE = ddb.Table(os.environ.get("PERSONS_TABLE", "Persons"))
+OCC_TABLE = ddb.Table(os.environ.get("OCCURRENCES_TABLE", "Occurrences"))
+PHOTOS_TABLE = ddb.Table(os.environ.get("PHOTOS_TABLE", "Photos"))
+
+THUMBS_BUCKET = os.environ["THUMBS_BUCKET"]
+PRESIGN_EXPIRES = int(os.environ.get("PRESIGN_EXPIRES", "3600"))
+
+
+def _json_default(o):
+    if isinstance(o, Decimal):
+        if o % 1 == 0:
+            return int(o)
+        return float(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+
+def _resp(status: int, body: dict):
+    return {
+        "statusCode": status,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        },
+        "body": json.dumps(body, default=_json_default),
+    }
+
+
+def presign_get_object(bucket: str, key: str) -> str:
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=PRESIGN_EXPIRES,
+    )
+
+
+def lambda_handler(event, context):
+    method = (
+        event.get("requestContext", {}).get("http", {}).get("method")
+        or event.get("httpMethod")
+    )
+    path = event.get("rawPath") or event.get("path") or ""
+
+    if method == "OPTIONS":
+        return _resp(200, {"ok": True})
+
+    # Route 1: GET /persons
+    if method == "GET" and path == "/persons":
+        items = []
+        resp = PERSONS_TABLE.scan(Limit=200)
+        items.extend(resp.get("Items", []))
+        while "LastEvaluatedKey" in resp and len(items) < 200:
+            resp = PERSONS_TABLE.scan(
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+                Limit=200,
+            )
+            items.extend(resp.get("Items", []))
+
+        items.sort(key=lambda x: int(x.get("photoCount", 0)), reverse=True)
+
+        out = []
+        for p in items[:100]:
+            rep_key = p.get("repThumbKey")
+            rep_url = presign_get_object(THUMBS_BUCKET, rep_key) if rep_key else None
+            out.append(
+                {
+                    "personId": p.get("personId"),
+                    "photoCount": p.get("photoCount", 0),
+                    "repThumbKey": rep_key,
+                    "repThumbUrl": rep_url,
+                }
+            )
+
+        return _resp(200, {"persons": out})
+
+    # Route 2: GET /persons/{personId}/photos
+    if method == "GET" and path.startswith("/persons/") and path.endswith("/photos"):
+        parts = path.strip("/").split("/")
+        if len(parts) != 3:
+            return _resp(400, {"error": "bad path"})
+        person_id = parts[1]
+
+        occ_items = OCC_TABLE.query(
+            KeyConditionExpression=Key("personId").eq(person_id),
+            Limit=200,
+        ).get("Items", [])
+
+        photos = []
+        for o in occ_items:
+            photo_id = o.get("photoId")
+            if not photo_id:
+                continue
+
+            photo_bucket = o.get("photoBucket")
+            photo_key = o.get("photoKey")
+
+            if not photo_bucket or not photo_key:
+                p = PHOTOS_TABLE.get_item(Key={"photoId": photo_id}).get("Item")
+                if not p:
+                    continue
+                photo_bucket = photo_bucket or p.get("s3Bucket")
+                photo_key = photo_key or p.get("s3Key")
+
+            photo_url = presign_get_object(photo_bucket, photo_key) if (photo_bucket and photo_key) else None
+
+            photos.append(
+                {
+                    "photoId": photo_id,
+                    "photoBucket": photo_bucket,
+                    "photoKey": photo_key,
+                    "thumbKey": thumb_key,
+                    "photoURL": photo_url,
+                }
+            )
+
+        return _resp(200, {"personId": person_id, "photos": photos})
+
+    return _resp(404, {"error": "not found", "path": path})
+```
+
+## Test
+
+Use your **API Gateway** invoke URL.
+
+<Steps>
+  <Step>
+    ### People grid endpoint
+
+```bash
+curl -X GET "<INVOKE_URL>/persons"
+```
+
+You should now see `repThumbUrl` included in each person object.
+
+Copy one `repThumbUrl` and paste it in a browser tab.
+If everything is correct, you should see the face thumbnail load.
+
+![Presigned URL preview on browser](/images/architecture/presigned-url-thumbnail-preview.png)
+
+</Step>
+
+  <Step>
+    ### Person detail endpoint
+
+```bash
+curl -X GET "<INVOKE_URL>/persons/<PERSON_ID>/photos"
+```
+
+You should now see `photoURL`.
+
+Copy one `photoURL` and paste it in a browser tab.
+If everything is correct, you should see the photo load.
+
+![Presigned URL preview on browser](/images/architecture/presigned-url-photos-preview.png)
+
+</Step>
+
+</Steps>
+
+## Common mistakes
+
+<Tabs items={["AccessDenied in browser", "Missing THUMBS_BUCKET", "repThumbUrl is null"]} groupId="phase14b-mistakes" persist> <Tab value="AccessDenied in browser">
+Your API Lambda role likely doesn't have <code>s3:GetObject</code> for the thumbs bucket objects.
+Add permission for your thumbs bucket prefix (for example <code>faces-thumbs/*</code>).
+
+</Tab>
+
+<Tab value="Missing THUMBS_BUCKET">
+  If Lambda errors with something like <code>KeyError: 'THUMBS_BUCKET'</code>,
+  add <code>THUMBS_BUCKET</code> in the API Lambda environment variables.
+</Tab>
+
+  <Tab value="repThumbUrl is null">
+    This usually means the person item has no <code>repThumbKey</code> yet.
+    Upload more photos (so persons gets created + `repThumbKey` is set).
+  </Tab>
+</Tabs>

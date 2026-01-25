@@ -18,30 +18,33 @@ Create an IAM role for the **Ingestion Lambda** that can:
 - write logs to CloudWatch
 
 <Callout type="warning" title="Least privilege">
-Do not use broad policies like <code>AdministratorAccess</code>. We'll grant only the exact permissions this Lambda needs.
+  Do not use broad policies like <code>AdministratorAccess</code>. We'll grant
+  only the exact permissions this Lambda needs.
 </Callout>
 
 <Steps>
   <Step>
     ## Create the IAM role
 
-1. Go to **IAM → Roles → Create role**
-2. **Trusted entity:** AWS service
-3. **Use case:** **Lambda**
-4. Click on **Next**
-5. Skip to Step 3 by clicking on **Name, review and create** on the step indicator
-6. **Role name**: `beetroot-ingest-role`
-7. Click **Create role**
-  </Step>
+    1. Go to **IAM → Roles → Create role**
+    2. **Trusted entity:** AWS service
+    3. **Use case:** **Lambda**
+    4. Click on **Next**
+    5. Skip to Step 3 by clicking on **Name, review and create** on the step indicator
+    6. **Role name**: `beetroot-ingest-role`
+    7. Click **Create role**
+
+   </Step>
 
   <Step>
 ## Add logging permissions
 
-1. Open the role: **IAM → Roles → `beetroot-ingest-role`**
-2. Go to **Permissions → Add permissions → Attach policies**
-3. Select: <code>AWSLambdaBasicExecutionRole</code>
-4. Click **Add Permissions**
-  </Step>
+    1. Open the role: **IAM → Roles → `beetroot-ingest-role`**
+    2. Go to **Permissions → Add permissions → Attach policies**
+    3. Select: <code>AWSLambdaBasicExecutionRole</code>
+    4. Click **Add Permissions**
+
+   </Step>
 
   <Step>
   ## Create the permissions policy
@@ -78,8 +81,11 @@ In this step, you will build the policy yourself using the **visual editor**, th
 
     6. Click **Add additional permissions** (we will add S3 Thumbs Bucket next)
     <Callout type="tip" title="Why two S3 resource entries?">
-We read only from <code> photos-raw/* </code> and write only to <code> faces-thumbs/* </code>. This keeps access tightly scoped.
-    </Callout>
+
+We read only from <code> photos-raw/_ </code> and write only to <code> faces-thumbs/_ </code>. This keeps access tightly scoped.
+
+</Callout>
+
   </Tab>
 
   <Tab value="S3: Thumbs (Write)">
@@ -103,6 +109,7 @@ We read only from <code> photos-raw/* </code> and write only to <code> faces-thu
     5. Click <b>Add</b> to save the ARN.
 
     6. Click **Add additional permissions** (we will add DynamoDB next)
+
   </Tab>
   <Tab value="S3 permissions">
     1. Select service: **S3**
@@ -126,8 +133,6 @@ We read only from <code> photos-raw/* </code> and write only to <code> faces-thu
             Object: `faces-thumbs/*`
 
     4. Click **Add additional permissions** (we will add DynamoDB next)
-
-
 
   </Tab>
 
@@ -160,6 +165,7 @@ We read only from <code> photos-raw/* </code> and write only to <code> faces-thu
       The ingestion Lambda uses <code>Query</code> when reading occurrence mappings by <code>personId</code>,
       and may use lookups during idempotency checks.
     </Callout>
+
   </Tab>
 
   <Tab value="Rekognition permissions">
@@ -181,6 +187,7 @@ We read only from <code> photos-raw/* </code> and write only to <code> faces-thu
       In IAM, many Rekognition actions don't support scoping to a single collection ARN in the visual editor.
       The least-privilege approach here is restricting the <b>actions</b> to only what we need.
     </Callout>
+
   </Tab>
 </Tabs>
 
@@ -189,13 +196,14 @@ We read only from <code> photos-raw/* </code> and write only to <code> faces-thu
   <Step>
   ## Save the inline policy
 
-1. Click **Next**
-1. **Policy name:** <code>BeetrootIngestPolicy</code>
-2. Click **Create policy**
-  </Step>
+    1. Click **Next**
+    2. **Policy name:** <code>BeetrootIngestPolicy</code>
+    3. Click **Create policy**
+     </Step>
+
 </Steps>
 
-## Full policy JSON
+## Full Policy JSON
 
 You can verify your policy configuration by switching to the **JSON** editor and comparing it against the policy document below. Alternatively, paste the following JSON directly to attach all required permissions at once.
 
@@ -249,5 +257,6 @@ You can verify your policy configuration by switching to the **JSON** editor and
 ## Checkpoint
 
 In the role's **Permissions** tab, you should see:
+
 - <code>AWSLambdaBasicExecutionRole</code>
 - <code>BeetrootIngestPolicy</code>

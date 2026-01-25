@@ -1,5 +1,5 @@
 ---
-title: "API Gateway HTTP API (Front Door for the API Lambda)"
+title: "API Gateway HTTP API"
 description: "Expose the Beetroot API Lambda using an HTTP API in API Gateway with routes, CORS, and a curl test."
 ---
 
@@ -23,12 +23,9 @@ GET /persons/{personId}/photos
   <b>Lambda</b> is the “brain” (runs your Python code and returns JSON).
 </Callout>
 
-## Before you start
-
-You should already have:
+## Prerequisites
 
 - Lambda: <code>beetroot-api</code> (from the previous phase)
-- The Lambda test works (returns JSON when invoked)
 
 <Callout type="tip" title="Region reminder">
   Create the HTTP API in the same region as your Lambda (us-east-1), otherwise
@@ -57,10 +54,11 @@ You should already have:
 
 In the setup flow:
 
-1. Under <b>Integrations</b>, select <b>Lambda</b>
-2. Region: <b>us-east-1</b>
-3. Choose your Lambda: <code>beetroot-api</code>
-4. Continue
+1. API Name: `BeetrootAPIGateway`
+2. Under <b>Integrations</b>, select <b>Lambda</b>
+3. Region: <b>us-east-1</b>
+4. Choose your Lambda: <code>beetroot-api</code>
+5. Next
 
 <Callout type="tip" title="What “integration” means">
   An integration is just “what should run when someone hits this route?”. Here,
@@ -72,12 +70,10 @@ In the setup flow:
   <Step>
     ### Define routes
 
-Add these two routes:
-
-```text
-GET <code>/persons</code>
-GET <code>/persons/{personId}/photos</code>
-```
+| Method  | Resource Path                |
+| ------- | ---------------------------- |
+| GET     | `/persons`                   |
+| OPTIONS | `/persons/{personId}/photos` |
 
 For both routes, choose the same integration: <code>beetroot-api</code>.
 
@@ -91,11 +87,11 @@ For both routes, choose the same integration: <code>beetroot-api</code>.
   <Step>
     ### Enable CORS (important for React)
 
-In the API creation flow (or later: <b>API settings → CORS</b>):
+In <b>API settings → Develop → CORS</b>:
 
-- <b>Allowed origins:</b> <code>*</code> (dev only)
-- <b>Allowed methods:</b> <code>GET, OPTIONS</code>
-- <b>Allowed headers:</b> <code>content-type</code>
+- <b>Access-Control-Allow-Origin:</b> <code>*</code> (dev only)
+- <b>Access-Control-Allow-Headers:</b> <code>content-type</code>
+- <b>Access-Control-Allow-Methods:</b> <code>GET, OPTIONS</code>
 
 <Callout type="warning" title="CORS note">
   <code>*</code> is fine for development. In production, set this to your real
@@ -107,10 +103,8 @@ In the API creation flow (or later: <b>API settings → CORS</b>):
   <Step>
     ### Stage + deploy
 
-HTTP APIs typically use the <code>$default</code> stage with <b>Auto-deploy</b>.
-
-- If you see <b>Auto-deploy</b>, keep it <b>ON</b>
-- Finish creation / deploy
+HTTP APIs typically use the <code>$default</code> stage with <b>Auto-deploy</b>. So, there's no
+need to click on the **Deploy** button.
 
 <Callout type="tip" title="What a stage is">
   A stage is a deployed version of your API. <code>$default</code> keeps things
@@ -123,11 +117,15 @@ HTTP APIs typically use the <code>$default</code> stage with <b>Auto-deploy</b>.
 ## Step 2: Confirm Lambda invoke permission
 
 API Gateway must be allowed to invoke your Lambda.
+Usually the console adds this automatically, but you can verify by 2 ways.
 
-Usually the console adds this automatically, but you can verify:
+First, open the `beetroot-api` lambda function.
 
-- Lambda → <code>beetroot-api</code> → <b>Configuration → Permissions</b>
-- Look for a statement mentioning <code>apigateway.amazonaws.com</code>
+1. You should see **API Gateway** connected to the lambda function, which gets executed on each request.
+
+![beetroot-api function overview with API Gateway](/images/architecture/beetroot-api-function-overview.png)
+
+2. Go to <b>Configuration → Permissions → Resource-based policy statements</b> and look for a statement mentioning <code>apigateway.amazonaws.com</code>
 
 <Callout type="info" title="If the permission is missing">
   If API Gateway can't invoke Lambda, you'll usually get <b>403</b> or{" "}
@@ -138,43 +136,14 @@ Usually the console adds this automatically, but you can verify:
 
 Go to:
 
-- API Gateway → your API → <b>Stages</b> → <code>$default</code>
+- API Gateway → `BeetrootAPIGateway` → <b>Stages</b> → <code>$default</code>
 - Copy the <b>Invoke URL</b>
-
-### Test Route 1: list persons
-
-```bash
-curl "<INVOKE_URL>/persons"
-```
-
-### Test Route 2: photos for one person
-
-1. Copy one <code>personId</code> from the <code>/persons</code> response
-2. Run:
-
-```bash
-curl "<INVOKE_URL>/persons/<PERSON_ID>/photos"
-```
-
-<Callout type="tip" title="What “success” looks like">
-  You should get JSON back (and not <code>403</code> / <code>500</code>). If{" "}
-  <code>/persons</code> returns an empty list, it usually means your Persons
-  table is empty (upload more photos first).
-</Callout>
-
-## Where logs are
-
-- <b>Lambda logs:</b> CloudWatch → Log groups →
-  <code>/aws/lambda/beetroot-api</code>
-- <b>API Gateway access logs:</b> optional (API Gateway → Stages → enable access
-  logging)
 
 ## Common issues
 
 <Tabs items={["403 Forbidden", "500 Internal Server Error", "CORS in browser only"]} groupId="phase13b-issues" persist> <Tab value="403 Forbidden">
 Most common causes:
 
-```
 - API Gateway does not have permission to invoke the Lambda
 - You're calling the wrong URL/stage
 
@@ -182,37 +151,97 @@ Check:
 
 - Lambda → <code>beetroot-api</code> → <b>Permissions</b> includes <code>apigateway.amazonaws.com</code>
 - API Gateway → <b>Stages</b> → using the correct <b>Invoke URL</b>
-```
 
-  </Tab>
+</Tab>
 
   <Tab value="500 Internal Server Error">
-    This usually means the Lambda crashed.
-
-```
-Check:
+    This usually means the Lambda crashed. Check:
 
 - CloudWatch logs: <code>/aws/lambda/beetroot-api</code>
 - Common causes:
   - Missing env vars (table names)
   - JSON serialization errors (Decimals) if the previous phase fix wasn't applied
-```
 
-  </Tab>
+</Tab>
 
   <Tab value="CORS in browser only">
     If <code>curl</code> works but the browser fails:
 
+- Ensure CORS is enabled in **API Gateway** (Allowed origins/methods/headers)
+- Ensure your Lambda response includes CORS headers (we added them in <code>\_resp</code>)
+
+</Tab>
+</Tabs>
+
+## Test
+
+### Route 1: list persons
+
+<Tabs items={["cURL", "Response"]} groupId="list-persons-req-resp" persist> <Tab value="cURL">
+
+```bash
+curl -X GET "<INVOKE_URL>/persons"
 ```
-- Ensure CORS is enabled in API Gateway (Allowed origins/methods/headers)
-- Ensure your Lambda response includes CORS headers (we added them in <code>_resp</code>)
+
+  </Tab>
+  <Tab value="Response">
+
+```json
+{
+  "persons": [
+    {
+      "photoCount": 4,
+      "createdAt": "2025-12-21T08:16:04.864553+00:00",
+      "personId": "a5a48144-1b50-4eca-9b93-65cf88527266",
+      "repThumbKey": "faces-thumbs/a5a48144-1b50-4eca-9b93-65cf88527266/9db7214ecc27b77b20eb_face_1.jpg"
+    },
+    ...
+  ]
+}
 ```
 
   </Tab>
 </Tabs>
 
-## Checkpoint
+### Route 2: photos for one person
 
-Answer this before moving on:
+Copy one <code>personId</code> from the <code>/persons</code> response.
 
-When you hit <code>GET /persons</code>, do you get a <b>200</b> with JSON back, or an error (<b>403</b>/<b>500</b>)?
+<Tabs items={["cURL", "Response"]} groupId="photos-per-person-req-resp" persist> <Tab value="cURL">
+
+```bash
+curl -X GET "<INVOKE_URL>/persons/{personId}/photos"
+```
+
+  </Tab>
+  <Tab value="Response">
+
+```json
+{
+  "personId": "a5a48144-1b50-4eca-9b93-65cf88527266",
+  "photos": [
+    {
+      "photoId": "4fcae858bfb8d5e935bd",
+      "photoBucket": "photo-clone-raw",
+      "photoKey": "photos-raw/r2h21.jpg",
+      "thumbKey": null
+    },
+    {
+      "photoId": "930719d43b6ebef54c53",
+      "photoBucket": "photo-clone-raw",
+      "photoKey": "photos-raw/r2h1.jpg",
+      "thumbKey": null
+    },
+    ...
+  ]
+}
+```
+
+  </Tab>
+</Tabs>
+
+<Callout type="tip" title="What “success” looks like">
+  You should get JSON back with status code `200` (and not <code>403</code> /{" "}
+  <code>500</code>). If <code>/persons</code> returns an empty list, it usually
+  means your Persons table is empty (upload more photos first).
+</Callout>

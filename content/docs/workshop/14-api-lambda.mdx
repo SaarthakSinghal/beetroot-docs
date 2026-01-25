@@ -43,30 +43,25 @@ From earlier phases, your DynamoDB data is now ready:
   <Step>
     ### Create function
 
-    AWS Console → **Lambda → Create function**
-
-    - **Name:** <code>beetroot-api</code>
-    - **Runtime:** Python 3.12
-    - **Permissions:** Create a new role (or reuse temporarily)
-
-    <Callout type="tip" title="About the role">
-      It's okay to reuse a role temporarily while learning. We'll tighten permissions later once everything is working.
-    </Callout>
+    1. Go to **Lambda → Create function**
+    2. Select **Author from scratch**
+    3. Fill:
+          - **Function name**: <code>beetroot-api</code>
+          - **Runtime**: Python 3.14
+    4. Under **Permissions**:
+          - Click **Change default execution role**
+          - Select **Use an existing role**
+          - Choose your role: <code>beetroot-api-role</code> (the role you created)
+    5. Click **Create function**
 
   </Step>
 
   <Step>
     ### Add environment variables
 
-    Lambda → **Configuration → Environment variables** → Add:
-
     - <code>PERSONS_TABLE</code> = <code>Persons</code>
     - <code>OCCURRENCES_TABLE</code> = <code>Occurrences</code>
     - <code>PHOTOS_TABLE</code> = <code>Photos</code>
-
-    <Callout type="info" title="Why env vars?">
-      Table names change from project to project. Environment variables keep your code reusable and clean.
-    </Callout>
 
   </Step>
 </Steps>
@@ -110,7 +105,7 @@ PHOTOS_TABLE = ddb.Table(os.environ.get("PHOTOS_TABLE", "Photos"))
   <code>Occurrences</code> table efficiently by partition key.
 </Callout>
 
-## Part 2: Make JSON safe for DynamoDB numbers (Decimal)
+## Part 2: JSON safe for DynamoDB numbers
 
 DynamoDB numbers come back from boto3 as <code>Decimal</code>.
 Python's <code>json.dumps()</code> cannot serialize <code>Decimal</code> unless we convert it.
@@ -133,7 +128,7 @@ def _json_default(o):
   keeps your API responses valid JSON for React.
 </Callout>
 
-## Part 3: A helper to return JSON (with CORS)
+## Part 3: Helper to return JSON (with CORS)
 
 Instead of repeating response formatting in every route, we create one helper:
 
