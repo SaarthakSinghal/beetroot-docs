@@ -1,55 +1,40 @@
 ---
-title: Hello World
-description: Your first document
+title: Hello There
+description: Documentation everywhere
+icon: GitBranch
 ---
 
-import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+import { Accordions, Accordion } from "fumadocs-ui/components/accordion";
 
-Welcome to the docs! You can start writing documents in `/content/docs`.
+## Welcome to `beetroot`
 
-## What is Next?
+A cute little project made for people aspired to learn more about AWS and its services.
+
+## Folder Structure
 
 <Accordions>
-<Accordion title="My Title" id="my-title">
+<Accordion title="Reference" id="reference">
 
-My Content
+still in work...
 
 </Accordion>
 
+<Accordion title="Workshop" id="workshop">
+
+This is the real deal, created only for you to create maybe your first ever
+AWS project without any hinderances or doubts.
+
+</Accordion>
 </Accordions>
 
-```py twoslash lineNumbers
-def upper_bound(nums: list[int], n: int) -> int:
-  low = 0
-  high = len(nums) - 1
-//  ^?
-  last number
-  ans = high + 1
+## To Get started
 
-  while (low <= high):
-    mid = low + (high - low) // 2
-
-    if (nums[mid] > n):
-      ans = mid
-      high = mid - 1
-    else:
-      low = mid + 1
-
-  return ans
-
-
-if __name__ == "__main__":
-  # Test the function
-  print(upper_bound([3,2,1,6,9,17,20], 17))
-  pass
-```
-
-```ts twoslash lineNumbers
-const a = 'Hello World';
-console.log(a);
-```
-
-<Cards>
-  <Card title="Learn more about Next.js" href="https://nextjs.org/docs" />
-  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
-</Cards>
+<div className="font-mono whitespace-pre leading-tight">
+  {`just click on the button down below -----
+                                            |
+                                            |
+                                             -----
+                                                  |
+                                                  |
+                                                  V`}
+</div>
