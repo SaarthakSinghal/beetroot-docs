@@ -1,5 +1,6 @@
 {
   "root": true,
   "title": "Reference",
-  "description": "Concepts and patterns"
+  "description": "Concepts and patterns",
+  "icon": "BookMarked"
 }
