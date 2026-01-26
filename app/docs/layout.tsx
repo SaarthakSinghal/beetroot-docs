@@ -14,7 +14,7 @@ export default async function Layout({ children }: LayoutProps<"/docs">) {
         {
           type: "icon",
           icon: <Github className="size-4" />,
-          label: "GitHub",
+          text: "GitHub",
           url: "https://github.com/SaarthakSinghal/beetroot-docs",
           external: true,
         },
