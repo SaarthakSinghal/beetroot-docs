@@ -1,45 +1,49 @@
-# findface
+<h1 align="center">Beetroot - Docs</h1>
 
-This is a Next.js application generated with
-[Create Fumadocs](https://github.com/fuma-nama/fumadocs).
+This repository contains the **documentation source code** for the Beetroot project.
 
-Run development server:
+Beetroot is an AWS-based photo system that:
+- detects faces using **Amazon Rekognition**
+- groups faces into **People** (using Rekognition Collections)
+- stores relationships in **DynamoDB** (`Persons`, `Occurrences`, `Photos`)
+- exposes a small **HTTP API** (API Gateway → Lambda) for the React frontend
+- serves images securely using **pre-signed S3 URLs**
+
+## What’s inside
+
+- 📚 **Docs site source** (Fumadocs)
+- 🧱 Step-by-step chapters for the backend build (S3 → Lambda → Rekognition → DynamoDB → API)
+- 🔐 Notes on IAM least-privilege, common mistakes, and debugging checkpoints
+
+## Local setup
+
+1) Install dependencies
+```bash
+npm install
+````
+
+2. Start the docs site
 
 ```bash
 npm run dev
-# or
-pnpm dev
-# or
-yarn dev
 ```
 
-Open http://localhost:3000 with your browser to see the result.
+3. Build for production
 
-## Explore
+```bash
+npm run build
+npm run start
+```
 
-In the project, you can see:
+## Requirements
 
-- `lib/source.ts`: Code for content source adapter, [`loader()`](https://fumadocs.dev/docs/headless/source-api) provides the interface to access your content.
-- `lib/layout.shared.tsx`: Shared options for layouts, optional but preferred to keep.
+* Node.js 18+ (recommended)
+* npm / pnpm / yarn / bun (any is fine)
 
-| Route                     | Description                                            |
-| ------------------------- | ------------------------------------------------------ |
-| `app/(home)`              | The route group for your landing page and other pages. |
-| `app/docs`                | The documentation layout and pages.                    |
-| `app/api/search/route.ts` | The Route Handler for search.                          |
+## Related repos
 
-### Fumadocs MDX
+* Frontend code: [beetroot](https://github.com/saarthaksinghal/beetroot)
 
-A `source.config.ts` config file has been included, you can customise different options like frontmatter schema.
+# Credits
 
-Read the [Introduction](https://fumadocs.dev/docs/mdx) for further details.
-
-## Learn More
-
-To learn more about Next.js and Fumadocs, take a look at the following
-resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js
-  features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 - [Fumadocs](https://fumadocs.dev) - learn about Fumadocs
