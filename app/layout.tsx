@@ -7,17 +7,19 @@ const inter = Inter({
   subsets: ['latin'],
 });
 
+const basePath = process.env.NODE_ENV === 'production' ? '/beetroot' : '';
+
 export const metadata: Metadata = {
   title: 'Beetroot',
   icons: [
     {
       rel: 'icon',
-      url: '/logo.svg',
+      url: `${basePath}/logo.svg`,
       media: '(prefers-color-scheme: light)',
     },
     {
       rel: 'icon',
-      url: '/logo-dark.svg',
+      url: `${basePath}/logo-dark.svg`,
       media: '(prefers-color-scheme: dark)',
     },
   ],
