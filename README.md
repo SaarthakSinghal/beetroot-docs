@@ -44,6 +44,6 @@ npm run start
 
 * Frontend code: [beetroot](https://github.com/saarthaksinghal/beetroot)
 
-# Credits
+## Credits
 
 - [Fumadocs](https://fumadocs.dev) - learn about Fumadocs
