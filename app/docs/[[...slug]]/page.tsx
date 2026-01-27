@@ -11,6 +11,10 @@ import type { Metadata } from "next";
 import { createRelativeLink } from "fumadocs-ui/mdx";
 import { LLMCopyButton, ViewOptions } from "@/components/ai/page-actions";
 
+// Enable ISR with 1-hour revalidation
+// This allows content updates without full rebuilds while maintaining performance
+export const revalidate = 3600;
+
 export default async function Page(props: PageProps<"/docs/[[...slug]]">) {
   const params = await props.params;
   const page = source.getPage(params.slug);

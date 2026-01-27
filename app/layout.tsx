@@ -34,7 +34,9 @@ export default function Layout({ children }: LayoutProps<'/'>) {
         <RootProvider
           search={{
             options: {
-              api: `${basePath}/api/search`,
+              // Use static search JSON instead of API route
+              // This eliminates serverless function invocations
+              api: `${basePath}/search/json`,
             },
           }}
         >
