@@ -2,6 +2,7 @@ import { RootProvider } from 'fumadocs-ui/provider/next';
 import './global.css';
 import { Inter } from 'next/font/google';
 import type { Metadata } from 'next';
+import DefaultSearchDialog from '@/components/search-dialog';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -26,16 +27,14 @@ export const metadata: Metadata = {
 };
 
 export default function Layout({ children }: LayoutProps<'/'>) {
-  const basePath = process.env.NODE_ENV === 'production' ? '/beetroot' : '';
-
   return (
     <html lang="en" className={inter.className} suppressHydrationWarning>
       <body className="flex flex-col min-h-screen">
         <RootProvider
           search={{
-            options: {
-              api: `${basePath}/api/search`,
-            },
+            // Use custom SearchDialog with static search
+            // This eliminates serverless function invocations
+            SearchDialog: DefaultSearchDialog,
           }}
         >
           {children}
