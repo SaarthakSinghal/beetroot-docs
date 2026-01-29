@@ -15,7 +15,7 @@ In this phase, you will update your **API Lambda** so it returns **pre-signed UR
 
 - **People grid** (`GET /persons`)
   - `repThumbKey`
-  - `repThumbUrl` (frontend renders this)
+  - `repThumbURL` (frontend renders this)
 
 - **Person detail** (`GET /persons/{personId}/photos`)
   - `photoURL` (full photo URL for the grid)
@@ -51,7 +51,7 @@ But the frontend still couldn't render images directly.
 
 <ul>
   <li>
-    <code>repThumbUrl</code> (People thumbnail)
+    <code>repThumbURL</code> (People thumbnail)
   </li>
   <li>
     <code>photoURL</code> (full photo for Person)
@@ -60,7 +60,7 @@ But the frontend still couldn't render images directly.
 
 Now React can do:
 
-- `<img src={repThumbUrl} />`
+- `<img src={repThumbURL} />`
 - `<img src={photoURL} />`
 
 </Tab>
@@ -226,7 +226,7 @@ If you prefer pasting JSON instead of using the visual editor, use this and repl
 ### Code Changes
 
 - Adds an S3 client + pre-sign helper
-- Route 1 (`GET /persons`) returns `repThumbUrl`
+- Route 1 (`GET /persons`) returns `repThumbURL`
 - Route 2 (`GET /persons/{personId}/photos`) returns `photoURL` (and `thumbURL`)
 
 ## Part 1: Add the S3 client + env vars
@@ -261,7 +261,7 @@ def presign_get_object(bucket: str, key: str) -> str:
     )
 ```
 
-## Part 3: Patch Route 1 — return `repThumbUrl`
+## Part 3: Patch Route 1 — return `repThumbURL`
 
 ### What this route did before
 
@@ -274,7 +274,7 @@ def presign_get_object(bucket: str, key: str) -> str:
 Before returning, build a clean list where each person includes:
 
 - `repThumbKey`
-- `repThumbUrl` (generated from that key)
+- `repThumbURL` (generated from that key)
 
 ```python
 out = []
@@ -285,7 +285,7 @@ for p in items[:100]:
         "personId": p.get("personId"),
         "photoCount": p.get("photoCount", 0),
         "repThumbKey": rep_key,
-        "repThumbUrl": rep_url,
+        "repThumbURL": rep_url,
     })
 
 return _resp(200, {"persons": out})
@@ -321,7 +321,7 @@ rep_url = presign_get_object(THUMBS_BUCKET, rep_key) if rep_key else None
   "personId": "0c7d...",
   "photoCount": 2,
   "repThumbKey": "faces-thumbs/0c7d.../fe40..._face_1.jpg",
-  "repThumbUrl": "https://...signed-url..."
+  "repThumbURL": "https://...signed-url..."
 }
 ```
 
@@ -462,7 +462,7 @@ def lambda_handler(event, context):
                     "personId": p.get("personId"),
                     "photoCount": p.get("photoCount", 0),
                     "repThumbKey": rep_key,
-                    "repThumbUrl": rep_url,
+                    "repThumbURL": rep_url,
                 }
             )
 
@@ -525,9 +525,9 @@ Use your **API Gateway** invoke URL.
 curl -X GET "<INVOKE_URL>/persons"
 ```
 
-You should now see `repThumbUrl` included in each person object.
+You should now see `repThumbURL` included in each person object.
 
-Copy one `repThumbUrl` and paste it in a browser tab.
+Copy one `repThumbURL` and paste it in a browser tab.
 If everything is correct, you should see the face thumbnail load.
 
 ![Presigned URL preview on browser](/images/architecture/presigned-url-thumbnail-preview.png)
@@ -554,7 +554,7 @@ If everything is correct, you should see the photo load.
 
 ## Common mistakes
 
-<Tabs items={["AccessDenied in browser", "Missing THUMBS_BUCKET", "repThumbUrl is null"]} groupId="phase14b-mistakes" persist> <Tab value="AccessDenied in browser">
+<Tabs items={["AccessDenied in browser", "Missing THUMBS_BUCKET", "repThumbURL is null"]} groupId="phase14b-mistakes" persist> <Tab value="AccessDenied in browser">
 Your API Lambda role likely doesn't have <code>s3:GetObject</code> for the thumbs bucket objects.
 Add permission for your thumbs bucket prefix (for example <code>faces-thumbs/*</code>).
 
@@ -565,7 +565,7 @@ Add permission for your thumbs bucket prefix (for example <code>faces-thumbs/*</
   add <code>THUMBS_BUCKET</code> in the API Lambda environment variables.
 </Tab>
 
-  <Tab value="repThumbUrl is null">
+  <Tab value="repThumbURL is null">
     This usually means the person item has no <code>repThumbKey</code> yet.
     Upload more photos (so persons gets created + `repThumbKey` is set).
   </Tab>
