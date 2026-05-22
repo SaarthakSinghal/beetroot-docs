@@ -15,10 +15,10 @@ In this phase, you will update your **API Lambda** so it returns **pre-signed UR
 
 - **People grid** (`GET /persons`)
   - `repThumbKey`
-  - `repThumbURL` (frontend renders this)
+  - `repThumbUrl` (frontend renders this)
 
 - **Person detail** (`GET /persons/{personId}/photos`)
-  - `photoURL` (full photo URL for the grid)
+  - `PhotoUrl` (full photo URL for the grid)
 
 <Callout type="info" title="Why pre-signed URLs?">
   Pre-signed URLs let your frontend access private S3 objects for a short time
@@ -51,17 +51,17 @@ But the frontend still couldn't render images directly.
 
 <ul>
   <li>
-    <code>repThumbURL</code> (People thumbnail)
+    <code>repThumbUrl</code> (People thumbnail)
   </li>
   <li>
-    <code>photoURL</code> (full photo for Person)
+    <code>photoUrl</code> (full photo for Person)
   </li>
 </ul>
 
 Now React can do:
 
-- `<img src={repThumbURL} />`
-- `<img src={photoURL} />`
+- `<img src={repThumbUrl} />`
+- `<img src={photoUrl} />`
 
 </Tab>
 </Tabs>
@@ -226,8 +226,8 @@ If you prefer pasting JSON instead of using the visual editor, use this and repl
 ### Code Changes
 
 - Adds an S3 client + pre-sign helper
-- Route 1 (`GET /persons`) returns `repThumbURL`
-- Route 2 (`GET /persons/{personId}/photos`) returns `photoURL` (and `thumbURL`)
+- Route 1 (`GET /persons`) returns `repThumbUrl`
+- Route 2 (`GET /persons/{personId}/photos`) returns `PhotoUrl` (and `thumbUrl`)
 
 ## Part 1: Add the S3 client + env vars
 
@@ -261,7 +261,7 @@ def presign_get_object(bucket: str, key: str) -> str:
     )
 ```
 
-## Part 3: Patch Route 1 — return `repThumbURL`
+## Part 3: Patch Route 1 — return `repThumbUrl`
 
 ### What this route did before
 
@@ -274,7 +274,7 @@ def presign_get_object(bucket: str, key: str) -> str:
 Before returning, build a clean list where each person includes:
 
 - `repThumbKey`
-- `repThumbURL` (generated from that key)
+- `repThumbUrl` (generated from that key)
 
 ```python
 out = []
@@ -285,7 +285,7 @@ for p in items[:100]:
         "personId": p.get("personId"),
         "photoCount": p.get("photoCount", 0),
         "repThumbKey": rep_key,
-        "repThumbURL": rep_url,
+        "repThumbUrl": rep_url,
     })
 
 return _resp(200, {"persons": out})
@@ -321,7 +321,7 @@ rep_url = presign_get_object(THUMBS_BUCKET, rep_key) if rep_key else None
   "personId": "0c7d...",
   "photoCount": 2,
   "repThumbKey": "faces-thumbs/0c7d.../fe40..._face_1.jpg",
-  "repThumbURL": "https://...signed-url..."
+  "repThumbUrl": "https://...signed-url..."
 }
 ```
 
@@ -333,11 +333,11 @@ rep_url = presign_get_object(THUMBS_BUCKET, rep_key) if rep_key else None
   temporary and may expire, so frontend should treat it as a render-only field.
 </Callout>
 
-## Part 4: Patch Route 2 — return `photoURL`
+## Part 4: Patch Route 2 — return `PhotoUrl`
 
 It returns the list of photo appearances. Now we add:
 
-- `photoURL` → pre-signed URL for the full image
+- `PhotoUrl` → pre-signed URL for the full image
 
 ### Resolve raw photo location
 
@@ -374,7 +374,7 @@ If not, fallback to the `Photos` table using `photoId`.
             "photoBucket": photo_bucket,
             "photoKey": photo_key,
             "thumbKey": thumb_key,
-            "photoURL": photo_url,
+            "photoUrl": photo_url,
         }
     )
 ```
@@ -462,7 +462,7 @@ def lambda_handler(event, context):
                     "personId": p.get("personId"),
                     "photoCount": p.get("photoCount", 0),
                     "repThumbKey": rep_key,
-                    "repThumbURL": rep_url,
+                    "repThumbUrl": rep_url,
                 }
             )
 
@@ -504,7 +504,7 @@ def lambda_handler(event, context):
                     "photoBucket": photo_bucket,
                     "photoKey": photo_key,
                     "thumbKey": thumb_key,
-                    "photoURL": photo_url,
+                    "photoUrl": photo_url,
                 }
             )
 
@@ -525,9 +525,9 @@ Use your **API Gateway** invoke URL.
 curl -X GET "<INVOKE_URL>/persons"
 ```
 
-You should now see `repThumbURL` included in each person object.
+You should now see `repThumbUrl` included in each person object.
 
-Copy one `repThumbURL` and paste it in a browser tab.
+Copy one `repThumbUrl` and paste it in a browser tab.
 If everything is correct, you should see the face thumbnail load.
 
 ![Presigned URL preview on browser](/images/architecture/presigned-url-thumbnail-preview.png)
@@ -541,9 +541,9 @@ If everything is correct, you should see the face thumbnail load.
 curl -X GET "<INVOKE_URL>/persons/<PERSON_ID>/photos"
 ```
 
-You should now see `photoURL`.
+You should now see `PhotoUrl`.
 
-Copy one `photoURL` and paste it in a browser tab.
+Copy one `PhotoUrl` and paste it in a browser tab.
 If everything is correct, you should see the photo load.
 
 ![Presigned URL preview on browser](/images/architecture/presigned-url-photos-preview.png)
@@ -554,7 +554,7 @@ If everything is correct, you should see the photo load.
 
 ## Common mistakes
 
-<Tabs items={["AccessDenied in browser", "Missing THUMBS_BUCKET", "repThumbURL is null"]} groupId="phase14b-mistakes" persist> <Tab value="AccessDenied in browser">
+<Tabs items={["AccessDenied in browser", "Missing THUMBS_BUCKET", "repThumbUrl is null"]} groupId="phase14b-mistakes" persist> <Tab value="AccessDenied in browser">
 Your API Lambda role likely doesn't have <code>s3:GetObject</code> for the thumbs bucket objects.
 Add permission for your thumbs bucket prefix (for example <code>faces-thumbs/*</code>).
 
@@ -565,7 +565,7 @@ Add permission for your thumbs bucket prefix (for example <code>faces-thumbs/*</
   add <code>THUMBS_BUCKET</code> in the API Lambda environment variables.
 </Tab>
 
-  <Tab value="repThumbURL is null">
+  <Tab value="repThumbUrl is null">
     This usually means the person item has no <code>repThumbKey</code> yet.
     Upload more photos (so persons gets created + `repThumbKey` is set).
   </Tab>
