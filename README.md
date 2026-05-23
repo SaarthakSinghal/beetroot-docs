@@ -11,9 +11,9 @@ Beetroot is an AWS-based photo system that:
 
 ## What’s inside
 
-- 📚 **Docs site source** (Fumadocs)
-- 🧱 Step-by-step chapters for the backend build (S3 → Lambda → Rekognition → DynamoDB → API)
-- 🔐 Notes on IAM least-privilege, common mistakes, and debugging checkpoints
+- **Docs site source** (Fumadocs)
+- Step-by-step chapters for the backend build (S3 → Lambda → Rekognition → DynamoDB → API)
+- Notes on IAM least-privilege, common mistakes, and debugging checkpoints
 
 ## Local setup
 
