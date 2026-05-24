@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 const width = 1200;
 const height = 630;
 const accent = '#960018';
-const grid = 'rgba(150, 0, 24, 0.2)';
+const grid = 'rgba(150, 0, 24, 0.4)';
 const siteUrl = 'docs.ssdev.space/beetroot';
 
 function readFont(path: string) {
