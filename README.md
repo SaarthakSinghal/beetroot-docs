@@ -14,31 +14,33 @@ Beetroot is an AWS-based photo system that:
 - **Docs site source** (Fumadocs)
 - Step-by-step chapters for the backend build (S3 → Lambda → Rekognition → DynamoDB → API)
 - Notes on IAM least-privilege, common mistakes, and debugging checkpoints
+- Dynamic Open Graph images for docs pages, generated from each page title and description
+- A small docs sidebar notice for the Keep Android Open campaign
 
 ## Local setup
 
 1) Install dependencies
 ```bash
-npm install
-````
+bun install
+```
 
 2. Start the docs site
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 3. Build for production
 
 ```bash
-npm run build
-npm run start
+bun run build
+bun run start
 ```
 
 ## Requirements
 
 * Node.js 18+ (recommended)
-* npm / pnpm / yarn / bun (any is fine)
+* Bun
 
 ## Related repos
 

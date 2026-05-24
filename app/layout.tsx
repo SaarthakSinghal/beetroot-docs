@@ -3,24 +3,24 @@ import './global.css';
 import { Inter } from 'next/font/google';
 import type { Metadata } from 'next';
 import DefaultSearchDialog from '@/components/search-dialog';
+import { siteOrigin, withBasePath } from '@/lib/site';
 
 const inter = Inter({
   subsets: ['latin'],
 });
 
-const basePath = process.env.NODE_ENV === 'production' ? '/beetroot' : '';
-
 export const metadata: Metadata = {
+  metadataBase: new URL(siteOrigin),
   title: 'Beetroot',
   icons: [
     {
       rel: 'icon',
-      url: `${basePath}/logo.svg`,
+      url: withBasePath('/logo.svg'),
       media: '(prefers-color-scheme: light)',
     },
     {
       rel: 'icon',
-      url: `${basePath}/logo-dark.svg`,
+      url: withBasePath('/logo-dark.svg'),
       media: '(prefers-color-scheme: dark)',
     },
   ],
